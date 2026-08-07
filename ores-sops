@@ -15,7 +15,7 @@
 
 set -euo pipefail
 
-VERSION="0.3.0"
+VERSION="0.3.1"
 DOTENV=(--input-type dotenv --output-type dotenv)
 
 fail() {
@@ -464,9 +464,10 @@ check_not_ignored() {
 }
 
 verify_ciphertext_file() {
-  local file="$1" line key value saw_mac=0
+  local file="$1" line key value saw_mac=0 shown
   assert_managed_file_safe "$file"
   [ -f "$file" ] || return 0
+  shown="$(log_path "$file")"
   while IFS= read -r line || [ -n "$line" ]; do
     case "$line" in
       sops_mac=ENC\[*) saw_mac=1 ;;
@@ -478,24 +479,28 @@ verify_ciphertext_file() {
           *)
             case "$value" in
               ENC\[*) ;;
-              *) fail "approved ciphertext contains an obvious plaintext assignment: $(log_path "$file")" ;;
+              *) fail "approved ciphertext contains an obvious plaintext assignment: $shown" ;;
             esac
             ;;
         esac
         ;;
     esac
   done <"$file"
-  [ "$saw_mac" = 1 ] || fail "$file does not look like SOPS dotenv ciphertext"
+  [ "$saw_mac" = 1 ] || fail "$shown does not look like SOPS dotenv ciphertext"
 }
 
 verify_sops_rules() {
-  local root line trimmed
+  local root line trimmed rule
   root="$(repo_root)"
   grep -Fq 'path_regex: ^env/enc/dev\.env\.enc$' "$root/.sops.yaml" || fail "missing exact dev SOPS creation rule"
   grep -Fq 'path_regex: ^env/enc/prod\.env\.enc$' "$root/.sops.yaml" || fail "missing exact prod SOPS creation rule"
   while IFS= read -r line || [ -n "$line" ]; do
     trimmed="${line#"${line%%[![:space:]]*}"}"
-    case "$trimmed" in
+    rule="$trimmed"
+    case "$rule" in
+      '- '*) rule="${rule#- }" ;;
+    esac
+    case "$rule" in
       'path_regex: ^env/enc/dev\.env\.enc$'|'path_regex: ^env/enc/prod\.env\.enc$') ;;
       path_regex:*env/enc*) fail "broad or noncanonical env/enc SOPS creation rule is not allowed" ;;
     esac
