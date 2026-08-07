@@ -52,9 +52,20 @@ for arg in "$@"; do
 done
 
 # --same-process replaces this process rather than forking, so the application
-# becomes PID 1 and receives SIGTERM from `docker stop` directly. Without it,
-# sops sits between the init signal and the app.
+# becomes PID 1 and receives SIGTERM from `docker stop` directly. Without it
+# sops sits between the init signal and the app, and stops become 10s timeouts.
 #
+# It is detected rather than assumed: the flag is absent from older sops builds,
+# including the one in Alpine's repositories, where passing it aborts with
+# "flag provided but not defined: -same-process". Detecting costs one exec at
+# startup and keeps this entrypoint working on whatever sops the base image has.
+same_process=''
+if sops exec-env --help 2>&1 | grep -q -- '--same-process'; then
+  same_process='--same-process'
+fi
+
 # The inner `exec` matters for the same reason: it stops the shell that sops
-# spawns from lingering as the app's parent.
-exec sops exec-env --same-process "$SOPS_SECRETS_FILE" "exec $quoted"
+# spawns from lingering as the application's parent.
+#
+# shellcheck disable=SC2086 # $same_process is a deliberate empty-or-one-flag
+exec sops exec-env $same_process "$SOPS_SECRETS_FILE" "exec $quoted"
