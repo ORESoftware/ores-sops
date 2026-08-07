@@ -198,6 +198,30 @@ EOF
   ! git check-ignore -q env/enc/prod.env.enc
 }
 
+@test "encrypt leaves status current even when the edit had blank lines" {
+  # sops' dotenv writer normalizes on round-trip (blank lines are dropped), so
+  # keeping the hand-edited bytes would leave plaintext != decrypt(ciphertext)
+  # and report STALE immediately after a successful encrypt.
+  ores-sops use app
+  printf 'ALPHA=one\n\nBRAVO=two\n\n\nCHARLIE=three\n' > env/dec/app.env
+  ores-sops encrypt app
+  run ores-sops status
+  [[ "$output" == *"current"* ]]
+  [[ "$output" != *"STALE"* ]]
+  # Values survive the normalization.
+  grep -q '^CHARLIE=three$' env/dec/app.env
+  grep -q '^BRAVO=two$' env/dec/app.env
+}
+
+@test "encrypt then refresh is a silent no-op" {
+  ores-sops use app
+  printf 'ALPHA=one\n\nBRAVO=changed\n' > env/dec/app.env
+  ores-sops encrypt app >/dev/null
+  run ores-sops refresh
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
 @test "pre-commit BLOCKS a staged plaintext env file" {
   ores-sops install-hooks --quiet
   ores-sops use app
