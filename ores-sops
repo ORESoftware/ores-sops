@@ -444,6 +444,7 @@ ores-sops — repo-convention glue around sops
 
   use <name> [-f]   decrypt env/enc/<name>.env.enc and link ./.env to it
   encrypt <name>    fold env/dec/<name>.env edits back into the ciphertext
+                    (--allow-empty to deliberately wipe an environment)
   edit <name>       sops edit, in place (plaintext never hits disk)
   diff <name>       what local plaintext edits would change
   status            per-environment state; * marks the active one
