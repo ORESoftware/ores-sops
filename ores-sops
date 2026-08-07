@@ -1,0 +1,383 @@
+#!/usr/bin/env bash
+# ores-sops — repo-convention glue around sops. Org-agnostic.
+#
+# sops already does the hard parts: encrypt, decrypt, in-place `sops edit` that
+# never writes plaintext to disk, `sops updatekeys` for rotating recipients, and
+# `.sops.yaml` creation rules. This tool deliberately does NOT wrap those. It
+# only adds what sops has no opinion about:
+#
+#   1. the repo convention  — env/enc/<name>.env.enc, env/dec/<name>.env, ./.env
+#   2. "which env is active" — a symlink, so tooling reads a stable path
+#   3. staying current       — re-decrypt after a merge changes the ciphertext
+#   4. not losing your work  — tell "you edited it" from "upstream changed it"
+#
+# Point 4 is the reason this exists rather than a one-line alias. After a merge,
+# plaintext != decrypt(ciphertext) — and so it is when you hand-edit. Those need
+# opposite handling, and comparing the two files cannot tell them apart, so the
+# plaintext is fingerprinted whenever this tool writes it.
+#
+# You are not expected to run this by hand. Git hooks call `refresh`, and a
+# repo's justfile/flake calls `use`. For anything else, use sops directly:
+#
+#   sops edit env/enc/prod.env.enc                 # change a secret
+#   sops updatekeys env/enc/prod.env.enc           # after editing .sops.yaml
+#   sops decrypt --input-type dotenv --output-type dotenv env/enc/prod.env.enc
+#   sops exec-env env/enc/prod.env.enc 'your-cmd'  # run with secrets, no file
+#   age-keygen -o ~/.config/sops/age/keys.txt      # create a key
+
+set -euo pipefail
+
+VERSION="0.1.0"
+
+# sops cannot infer dotenv from an `.enc` suffix, so the type is always explicit.
+DOTENV=(--input-type dotenv --output-type dotenv)
+
+die() {
+  printf 'ores-sops: %s\n' "$*" >&2
+  exit 1
+}
+
+repo_root() { git rev-parse --show-toplevel 2>/dev/null || die "not inside a git repository"; }
+enc_path() { printf '%s/env/enc/%s.env.enc' "$(repo_root)" "$1"; }
+dec_path() { printf '%s/env/dec/%s.env' "$(repo_root)" "$1"; }
+stamp_path() { printf '%s/env/dec/.%s.env.sha256' "$(repo_root)" "$1"; }
+
+need_name() { [ -n "${1:-}" ] || die "missing environment name (try: ores-sops status)"; }
+
+sha256_stdin() {
+  if command -v sha256sum >/dev/null 2>&1; then sha256sum | awk '{print $1}'
+  else shasum -a 256 | awk '{print $1}'; fi
+}
+
+record_stamp() {
+  local stamp
+  stamp="$(stamp_path "$1")"
+  install -m 600 /dev/null "$stamp"
+  sha256_stdin <"$(dec_path "$1")" >"$stamp"
+}
+
+# Has the user hand-edited the plaintext since this tool last wrote it?
+# Answered from the recorded fingerprint, never by comparing to the ciphertext —
+# see the header. Missing stamp falls back to the conservative comparison so an
+# unknown file is treated as edited rather than silently overwritten.
+has_local_edits() {
+  local dst stamp
+  dst="$(dec_path "$1")"
+  stamp="$(stamp_path "$1")"
+  [ -f "$dst" ] || return 1
+  if [ -f "$stamp" ]; then
+    [ "$(sha256_stdin <"$dst")" != "$(cat "$stamp")" ]
+    return
+  fi
+  [ -f "$(enc_path "$1")" ] || return 1
+  ! sops decrypt "${DOTENV[@]}" "$(enc_path "$1")" 2>/dev/null | diff -q - "$dst" >/dev/null 2>&1
+}
+
+# Is there an upstream change waiting to be applied?
+ciphertext_differs() {
+  local src dst
+  src="$(enc_path "$1")"
+  dst="$(dec_path "$1")"
+  [ -f "$src" ] || return 1
+  [ -f "$dst" ] || return 0
+  ! sops decrypt "${DOTENV[@]}" "$src" 2>/dev/null | diff -q - "$dst" >/dev/null 2>&1
+}
+
+active_name() {
+  local root target
+  root="$(repo_root)"
+  [ -L "$root/.env" ] || return 0
+  target="$(readlink "$root/.env")"
+  case "$target" in env/dec/*.env) basename "$target" .env ;; *) return 0 ;; esac
+}
+
+write_plaintext() {
+  local name="$1" dst
+  dst="$(dec_path "$name")"
+  mkdir -p "$(dirname "$dst")"
+  # Create at 0600 before writing so plaintext is never briefly world-readable.
+  install -m 600 /dev/null "$dst"
+  sops decrypt "${DOTENV[@]}" "$(enc_path "$name")" >"$dst" ||
+    die "could not decrypt '$name' — is your age key a recipient?"
+  record_stamp "$name"
+}
+
+# ---------------------------------------------------------------------------
+
+cmd_use() {
+  local force=0
+  if [ "${1:-}" = "--force" ] || [ "${1:-}" = "-f" ]; then force=1; shift; fi
+  need_name "${1:-}"
+  [ -f "$(enc_path "$1")" ] || die "no such environment '$1'"
+
+  if [ "$force" = 0 ] && has_local_edits "$1"; then
+    die "env/dec/$1.env has edits that are not encrypted yet.
+  keep them:     ores-sops encrypt $1
+  inspect them:  ores-sops diff $1
+  discard them:  ores-sops use --force $1"
+  fi
+
+  write_plaintext "$1"
+  ln -sfn "env/dec/$1.env" "$(repo_root)/.env"
+  printf 'ores-sops: .env -> env/dec/%s.env\n' "$1"
+}
+
+cmd_encrypt() {
+  need_name "${1:-}"
+  local root src dst
+  root="$(repo_root)"
+  src="env/dec/$1.env"
+  dst="env/enc/$1.env.enc"
+  [ -f "$root/$src" ] || die "missing $root/$src"
+  mkdir -p "$root/env/enc"
+
+  # Run from the repo root with repo-relative paths.
+  #
+  # sops resolves --filename-override against the current directory before
+  # matching creation_rules. An absolute path defeats a `^env/enc/...` rule
+  # whenever cwd and the path disagree — which happens routinely on macOS,
+  # where /tmp is a symlink to /private/tmp and `git rev-parse --show-toplevel`
+  # returns the resolved form while $PWD does not.
+  (
+    cd "$root" || exit 1
+    # --filename-override makes creation_rules match the encrypted path rather
+    # than the plaintext path the bytes are read from.
+    sops encrypt "${DOTENV[@]}" --filename-override "$dst" "$src" >"$dst.tmp"
+    mv "$dst.tmp" "$dst"
+  ) || die "could not encrypt '$1' (no matching creation rule in .sops.yaml?)"
+  # Plaintext and ciphertext now agree; rebaseline or these edits would keep
+  # reading as unencrypted and block the next refresh.
+  record_stamp "$1"
+  printf 'ores-sops: encrypted -> env/enc/%s.env.enc\n' "$1"
+}
+
+# Thin passthrough. Kept because it is the recommended way to change a secret,
+# and it should be discoverable from this tool's help.
+cmd_edit() {
+  need_name "${1:-}"
+  sops edit "${DOTENV[@]}" "$(enc_path "$1")"
+}
+
+cmd_diff() {
+  need_name "${1:-}"
+  [ -f "$(dec_path "$1")" ] || die "env/dec/$1.env does not exist"
+  diff -u <(sops decrypt "${DOTENV[@]}" "$(enc_path "$1")") "$(dec_path "$1")" &&
+    printf 'no local edits\n'
+}
+
+# Re-decrypt the active environment if its ciphertext changed.
+#
+# Called by git hooks, so it must be safe to run constantly: silent when there
+# is nothing to do, never clobbers unencrypted edits, and never fails. A hook
+# that aborts a merge because a secret could not be decrypted is worse than
+# stale plaintext.
+cmd_refresh() {
+  local quiet=0
+  [ "${1:-}" = "--quiet" ] && quiet=1
+
+  local name
+  name="$(active_name)" || return 0
+  [ -n "$name" ] || return 0
+  [ -f "$(enc_path "$name")" ] || return 0
+  command -v sops >/dev/null 2>&1 || return 0
+
+  if has_local_edits "$name"; then
+    printf 'ores-sops: env/dec/%s.env has unencrypted edits; not refreshing.\n' "$name" >&2
+    printf '           keep: ores-sops encrypt %s   discard: ores-sops use --force %s\n' "$name" "$name" >&2
+    return 0
+  fi
+
+  ciphertext_differs "$name" || return 0
+
+  if ! write_plaintext "$name" 2>/dev/null; then
+    [ "$quiet" = 1 ] || printf 'ores-sops: could not decrypt %s; left as is\n' "$name" >&2
+    return 0
+  fi
+  printf 'ores-sops: refreshed env/dec/%s.env\n' "$name"
+}
+
+cmd_status() {
+  local root enc name any=0
+  root="$(repo_root)"
+  command -v sops >/dev/null 2>&1 || printf '  ! sops not found\n'
+  [ -f "${SOPS_AGE_KEY_FILE:-$HOME/.config/sops/age/keys.txt}" ] ||
+    printf '  ! no age key at %s\n' "${SOPS_AGE_KEY_FILE:-$HOME/.config/sops/age/keys.txt}"
+
+  for enc in "$root"/env/enc/*.env.enc; do
+    [ -e "$enc" ] || continue
+    any=1
+    name="$(basename "$enc" .env.enc)"
+    local mark="  "
+    [ "$(active_name)" = "$name" ] && mark="* "
+    if ! sops decrypt "${DOTENV[@]}" "$enc" >/dev/null 2>&1; then
+      printf '%s%-14s CANNOT DECRYPT — your key is not a recipient\n' "$mark" "$name"
+    elif has_local_edits "$name"; then
+      printf '%s%-14s EDITED — ores-sops encrypt %s\n' "$mark" "$name" "$name"
+    elif [ ! -f "$(dec_path "$name")" ]; then
+      printf '%s%-14s encrypted only\n' "$mark" "$name"
+    elif ciphertext_differs "$name"; then
+      printf '%s%-14s STALE — ores-sops refresh\n' "$mark" "$name"
+    else
+      printf '%s%-14s current\n' "$mark" "$name"
+    fi
+  done
+  [ "$any" = 1 ] || printf '  no environments (run: ores-sops init)\n'
+}
+
+# Remove decrypted plaintext and the .env symlink.
+#
+# These are untracked, gitignored, and regenerable with `use`; they hold live
+# credentials, so leaving them on disk is the larger risk. Scoped to exact
+# filenames: no recursion, nothing outside env/dec/.
+cmd_lock() {
+  local root f
+  root="$(repo_root)"
+  for f in "$root"/env/dec/*.env "$root"/env/dec/.*.env.sha256; do
+    [ -e "$f" ] || continue
+    rm -f -- "$f"
+  done
+  [ -L "$root/.env" ] && rm -f -- "$root/.env"
+  printf 'ores-sops: removed decrypted plaintext and .env\n'
+}
+
+# Git has no post-pull hook: post-merge covers `git pull`, post-checkout covers
+# branch switches and clones, post-rewrite covers rebase. .git/hooks is not
+# shared by git, so every clone runs this once — a devShell hook does it.
+cmd_install_hooks() {
+  local quiet=0
+  [ "${1:-}" = "--quiet" ] && quiet=1
+  local root dir hook file path fallback marker
+  root="$(repo_root)"
+  dir="$root/$(git -C "$root" rev-parse --git-path hooks)"
+  mkdir -p "$dir"
+  marker="# managed by ores-sops"
+
+  # Hooks run with a minimal PATH from GUI git clients, so record an absolute
+  # fallback: whatever is on PATH now, else the tool currently executing.
+  path="$(command -v ores-sops 2>/dev/null || true)"
+  [ -n "$path" ] || path="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/$(basename -- "${BASH_SOURCE[0]}")"
+  fallback=""
+  [ -x "$path" ] && fallback="elif [ -x '$path' ]; then
+  '$path' refresh --quiet || true"
+
+  for hook in post-merge post-checkout post-rewrite; do
+    file="$dir/$hook"
+    if [ -e "$file" ] && ! grep -q "$marker" "$file" 2>/dev/null; then
+      printf 'ores-sops: %s exists and is not ours; leaving it alone\n' "$hook" >&2
+      continue
+    fi
+    cat >"$file" <<EOF
+#!/usr/bin/env bash
+$marker — refresh decrypted env when the ciphertext changes.
+# Must never fail the git operation.
+set -u
+if command -v ores-sops >/dev/null 2>&1; then
+  ores-sops refresh --quiet || true
+$fallback
+fi
+exit 0
+EOF
+    chmod +x "$file"
+    [ "$quiet" = 1 ] || printf 'installed %s\n' "$hook"
+  done
+}
+
+# Scaffold the convention. Idempotent: never overwrites an existing file.
+cmd_init() {
+  local root key recipient ignore
+  root="$(repo_root)"
+  key="${SOPS_AGE_KEY_FILE:-$HOME/.config/sops/age/keys.txt}"
+  [ -f "$key" ] || die "no age key at $key — create one with: age-keygen -o $key"
+  recipient="$(grep -o 'age1[a-z0-9]\{58\}' "$key" | head -1)"
+  [ -n "$recipient" ] || die "no age recipient found in $key"
+
+  mkdir -p "$root/env/enc" "$root/env/dec"
+
+  if [ -f "$root/.sops.yaml" ]; then
+    printf 'kept existing .sops.yaml\n'
+  else
+    cat >"$root/.sops.yaml" <<EOF
+# SOPS creation rules. Only ciphertext is committed.
+#
+# For dotenv files SOPS encrypts VALUES only — variable names stay readable, so
+# a diff shows which variable changed without revealing what it was set to.
+#
+# Add a recipient: append its age public key below, then
+#   sops updatekeys env/enc/<name>.env.enc
+keys:
+  - &primary $recipient
+
+creation_rules:
+  - path_regex: ^env/enc/.*\\.env\\.enc\$
+    key_groups:
+      - age:
+          - *primary
+EOF
+    printf 'created .sops.yaml\n'
+  fi
+
+  ignore="$root/.gitignore"
+  if grep -qE '^env/dec' "$ignore" 2>/dev/null; then
+    printf 'kept existing .gitignore rules\n'
+  else
+    cat >>"$ignore" <<'EOF'
+
+# Environment secrets (ores-sops). Only ciphertext under env/enc/ is committed.
+.env
+*.env
+**/*.env
+env/dec
+env/dec/*
+# Keep the ciphertext committable: `x.env.enc` does not match `*.env` since it
+# ends in .enc, but negate explicitly so broadening the rules above cannot
+# silently start ignoring the encrypted files.
+!env/enc/
+!env/enc/*.env.enc
+!env/template.env.example
+EOF
+    printf 'appended env rules to .gitignore\n'
+  fi
+}
+
+usage() {
+  cat <<'EOF'
+ores-sops — repo-convention glue around sops
+
+  use <name> [-f]   decrypt env/enc/<name>.env.enc and link ./.env to it
+  encrypt <name>    fold env/dec/<name>.env edits back into the ciphertext
+  edit <name>       sops edit, in place (plaintext never hits disk)
+  diff <name>       what local plaintext edits would change
+  status            per-environment state; * marks the active one
+  refresh           re-decrypt the active env if its ciphertext changed (hooks)
+  lock              remove decrypted plaintext and the .env symlink
+  install-hooks     post-merge/post-checkout/post-rewrite -> refresh
+  init              scaffold env/, .sops.yaml and .gitignore rules
+
+Everything else is plain sops:
+  sops edit env/enc/prod.env.enc
+  sops updatekeys env/enc/prod.env.enc
+  sops exec-env env/enc/prod.env.enc 'your-command'
+  age-keygen -o ~/.config/sops/age/keys.txt
+EOF
+}
+
+main() {
+  local cmd="${1:-}"
+  [ "$#" -gt 0 ] && shift || true
+  case "$cmd" in
+    use) cmd_use "$@" ;;
+    encrypt) cmd_encrypt "$@" ;;
+    edit) cmd_edit "$@" ;;
+    diff) cmd_diff "$@" ;;
+    status) cmd_status "$@" ;;
+    refresh) cmd_refresh "$@" ;;
+    lock) cmd_lock "$@" ;;
+    install-hooks) cmd_install_hooks "$@" ;;
+    init) cmd_init "$@" ;;
+    --version | version) printf 'ores-sops %s\n' "$VERSION" ;;
+    -h | --help | help | "") usage ;;
+    *) die "unknown command '$cmd' (try: ores-sops help)" ;;
+  esac
+}
+
+main "$@"
