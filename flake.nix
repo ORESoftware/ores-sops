@@ -71,6 +71,14 @@
           packages = with pkgs; [ ores-sops sops age git just shellcheck bats ];
         };
 
+        # The container entrypoint is shipped as an example people copy, so it
+        # gets the same shellcheck gate as the tool itself.
+        checks.entrypoint-shellcheck = pkgs.runCommand "entrypoint-shellcheck"
+          { nativeBuildInputs = [ pkgs.shellcheck ]; } ''
+          shellcheck --shell=sh ${./examples/docker/entrypoint.sh}
+          touch "$out"
+        '';
+
         checks.tests = pkgs.runCommand "ores-sops-tests"
           {
             nativeBuildInputs = with pkgs; [ ores-sops sops age git bats coreutils ];
