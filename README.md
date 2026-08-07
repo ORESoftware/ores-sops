@@ -77,6 +77,7 @@ ores-sops init
 ores-sops use dev|prod [--force]
 ores-sops encrypt dev|prod [--allow-empty]
 ores-sops edit dev|prod
+ores-sops diff dev|prod
 ores-sops status
 ores-sops refresh
 ores-sops verify
@@ -84,6 +85,8 @@ ores-sops precommit
 ores-sops lock
 ores-sops install-hooks
 ```
+
+`diff` is deliberately non-secret: it reports only variable names prefixed with `+` (added), `-` (removed), or `~` (value changed). It hashes values internally for comparison and never prints them.
 
 Arbitrary environment names are rejected. This is intentional: the tracked VCS contract is exactly `dev` and `prod`.
 
@@ -175,4 +178,4 @@ nix develop --command bats tests/
 nix flake check
 ```
 
-The regression suite covers the exact allowlist, nested plaintext rejection, dev/prod name restriction, SOPS ciphertext shape, relative symlinking, atomic failure preservation, local-edit protection, unmanaged `.env` refusal, cleanup safety, and policy verification.
+The regression suite covers the exact allowlist, nested plaintext rejection, dev/prod name restriction, SOPS ciphertext shape, relative symlinking, atomic failure preservation, local-edit protection, unmanaged `.env` refusal, cleanup safety, non-secret diff behavior, and policy verification.
