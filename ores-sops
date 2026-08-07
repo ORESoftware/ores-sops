@@ -138,7 +138,8 @@ cmd_encrypt() {
   # more likely to be a truncated file, a failed redirect, or an interrupted
   # edit than a deliberate wipe — and the result would be a commit that quietly
   # destroys every secret in that environment. Cheap to override when intended.
-  if [ ! -s "$root/$src" ] || ! grep -qE '^[A-Za-z_][A-Za-z0-9_]*=' "$root/$src"; then
+  if [ "$allow_empty" = 0 ] &&
+    { [ ! -s "$root/$src" ] || ! grep -qE '^[A-Za-z_][A-Za-z0-9_]*=' "$root/$src"; }; then
     if [ -s "$root/$dst" ]; then
       die "env/dec/$1.env has no variables but env/enc/$1.env.enc is not empty.
   Refusing to encrypt an empty file over existing secrets.
