@@ -23,15 +23,6 @@
             gnused
             diffutils
           ];
-          # SC2064: cleanup traps intentionally capture the generated temp path
-          # while it is in scope, so `set -u` cannot lose it on function return.
-          # SC2094: verify_ciphertext_file reads a ciphertext while a diagnostic
-          # command-substitution shell-escapes the *path string*; ShellCheck sees
-          # the same variable name and conservatively reports possible same-file
-          # read/write even though log_path only calls printf. Adversarial Bats
-          # coverage exercises this verifier, so keep the exclusion explicit and
-          # narrowly documented rather than disabling ShellCheck generally.
-          excludeShellChecks = [ "SC2064" "SC2094" ];
           text = builtins.readFile ./ores-sops;
         };
       };
