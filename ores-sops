@@ -329,6 +329,30 @@ EOF
     chmod +x "$file"
     [ "$quiet" = 1 ] || printf 'installed %s\n' "$hook"
   done
+
+  # pre-commit is the one hook that is allowed to fail: it blocks a commit that
+  # would put plaintext secrets in history, and warns when the decrypted input
+  # disagrees with the ciphertext being committed.
+  file="$dir/pre-commit"
+  if [ -e "$file" ] && ! grep -q "$marker" "$file" 2>/dev/null; then
+    printf 'ores-sops: pre-commit exists and is not ours; leaving it alone\n' >&2
+  else
+    local pc_fallback=""
+    [ -x "$path" ] && pc_fallback="elif [ -x '$path' ]; then
+  '$path' precommit || exit 1"
+    cat >"$file" <<EOF
+#!/usr/bin/env bash
+$marker — block staged plaintext secrets, warn on unencrypted edits.
+set -u
+if command -v ores-sops >/dev/null 2>&1; then
+  ores-sops precommit || exit 1
+$pc_fallback
+fi
+exit 0
+EOF
+    chmod +x "$file"
+    [ "$quiet" = 1 ] || printf 'installed pre-commit\n'
+  fi
 }
 
 # Scaffold the convention. Idempotent: never overwrites an existing file.
