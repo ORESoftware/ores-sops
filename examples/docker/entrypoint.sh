@@ -40,32 +40,37 @@ if [ -z "${SOPS_AGE_KEY:-}" ] && [ -z "${SOPS_AGE_KEY_FILE:-}" ]; then
   exit 1
 fi
 
-# `sops exec-env` takes the command as ONE string and runs it through a shell;
-# trailing arguments are not forwarded as positional parameters. So rebuild the
-# argument vector as a single shell-quoted string. Each argument is wrapped in
-# single quotes with embedded single quotes escaped, which survives spaces,
-# quotes, globs and $ in argument values.
-quoted=''
-for arg in "$@"; do
-  escaped=$(printf '%s' "$arg" | sed "s/'/'\\\\''/g")
-  quoted="$quoted '$escaped'"
-done
-
-# --same-process replaces this process rather than forking, so the application
-# becomes PID 1 and receives SIGTERM from `docker stop` directly. Without it
-# sops sits between the init signal and the app, and stops become 10s timeouts.
+# Load the decrypted values into THIS shell, then exec the real command, so the
+# application replaces this process and becomes PID 1.
 #
-# It is detected rather than assumed: the flag is absent from older sops builds,
-# including the one in Alpine's repositories, where passing it aborts with
-# "flag provided but not defined: -same-process". Detecting costs one exec at
-# startup and keeps this entrypoint working on whatever sops the base image has.
-same_process=''
-if sops exec-env --help 2>&1 | grep -q -- '--same-process'; then
-  same_process='--same-process'
-fi
-
-# The inner `exec` matters for the same reason: it stops the shell that sops
-# spawns from lingering as the application's parent.
+# Deliberately not `sops exec-env`. That runs the command as a child of sops,
+# which then owns PID 1 and does not forward signals: `docker stop` kills sops
+# and the application never sees SIGTERM, so it gets no chance to drain
+# connections or flush. Measured, not assumed — with sops as PID 1 a trap on
+# TERM in the child never fires. (sops >= 3.9 has --same-process, which fixes
+# this, but Alpine ships 3.8.1 and rejects the flag outright.)
 #
-# shellcheck disable=SC2086 # $same_process is a deliberate empty-or-one-flag
-exec sops exec-env $same_process "$SOPS_SECRETS_FILE" "exec $quoted"
+# `sops -d` writes to stdout; the plaintext lives only in this shell's memory
+# and never touches the filesystem.
+#
+# Parsed with `read` + `export`, never `eval`. A decrypted value containing
+# `$(...)` or a backtick would be executed by eval — turning read access to the
+# secrets file into arbitrary code execution in the container. `export "$k=$v"`
+# assigns literally. Splitting on the first `=` only, via IFS, keeps values that
+# themselves contain `=` (URLs, base64, JWTs) intact.
+secrets=$(sops --decrypt --input-type dotenv --output-type dotenv "$SOPS_SECRETS_FILE") || {
+  echo "entrypoint: failed to decrypt $SOPS_SECRETS_FILE" >&2
+  exit 1
+}
+
+while IFS='=' read -r key value; do
+  case "$key" in
+    '' | '#'*) continue ;; # blank lines and sops' comment entries
+  esac
+  export "$key=$value"
+done <<EOF
+$secrets
+EOF
+unset secrets
+
+exec "$@"
