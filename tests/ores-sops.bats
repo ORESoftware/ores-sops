@@ -126,13 +126,12 @@ EOF_IGNORE
   [[ "$output" == *"BLOCKED"* ]]
 }
 
-@test "precommit blocks rename into plaintext dotenv path" {
+@test "precommit blocks staged rename into plaintext dotenv path" {
   ores-sops install-hooks
   printf 'safe\n' > safe.txt
   git add safe.txt
   git commit -qm safe
-  mv safe.txt renamed.env
-  git add -A
+  git mv -f safe.txt renamed.env
   run git commit -qm rename
   [ "$status" -ne 0 ]
   [[ "$output" == *"BLOCKED"* ]]
