@@ -422,8 +422,9 @@ ores-sops — repo-convention glue around sops
   diff <name>       what local plaintext edits would change
   status            per-environment state; * marks the active one
   refresh           re-decrypt the active env if its ciphertext changed (hooks)
+  precommit         block staged plaintext, warn if input != committed output
   lock              remove decrypted plaintext and the .env symlink
-  install-hooks     post-merge/post-checkout/post-rewrite -> refresh
+  install-hooks     post-{merge,checkout,rewrite} -> refresh; pre-commit -> precommit
   init              scaffold env/, .sops.yaml and .gitignore rules
 
 Everything else is plain sops:
@@ -444,6 +445,7 @@ main() {
     diff) cmd_diff "$@" ;;
     status) cmd_status "$@" ;;
     refresh) cmd_refresh "$@" ;;
+    precommit) cmd_precommit "$@" ;;
     lock) cmd_lock "$@" ;;
     install-hooks) cmd_install_hooks "$@" ;;
     init) cmd_init "$@" ;;
