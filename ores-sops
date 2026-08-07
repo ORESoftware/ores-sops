@@ -15,7 +15,7 @@
 
 set -euo pipefail
 
-VERSION="0.2.0"
+VERSION="0.2.1"
 DOTENV=(--input-type dotenv --output-type dotenv)
 
 fail() {
@@ -185,6 +185,56 @@ cmd_edit() {
   sops edit "${DOTENV[@]}" "$(enc_path "$name")"
 }
 
+fingerprint_dotenv() {
+  local file="$1" line key value hash
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      [A-Za-z_][A-Za-z0-9_]*=*)
+        key="${line%%=*}"
+        value="${line#*=}"
+        hash="$(printf '%s' "$value" | sha256_stdin)"
+        printf '%s\t%s\n' "$key" "$hash"
+        ;;
+    esac
+  done <"$file" | sort
+}
+
+cmd_diff() {
+  local name="${1:-}" src dst dir baseline oldmap newmap report
+  need_env "$name"
+  src="$(enc_path "$name")"
+  dst="$(dec_path "$name")"
+  [ -f "$src" ] || fail "missing env/enc/$name.env.enc"
+  [ -f "$dst" ] || fail "missing env/dec/$name.env; run ores-sops use $name first"
+
+  dir="$(dirname "$dst")"
+  umask 077
+  baseline="$(mktemp "$dir/.${name}.diff-base.XXXXXX")"
+  oldmap="$(mktemp "$dir/.${name}.diff-old.XXXXXX")"
+  newmap="$(mktemp "$dir/.${name}.diff-new.XXXXXX")"
+  report="$(mktemp "$dir/.${name}.diff-report.XXXXXX")"
+  trap 'rm -f "$baseline" "$oldmap" "$newmap" "$report"' RETURN
+
+  if ! sops decrypt "${DOTENV[@]}" "$src" >"$baseline"; then
+    fail "could not decrypt '$name' for diff"
+  fi
+  fingerprint_dotenv "$baseline" >"$oldmap"
+  fingerprint_dotenv "$dst" >"$newmap"
+
+  awk -F '\t' '
+    NR==FNR { old[$1]=$2; next }
+    { seen[$1]=1; if (!($1 in old)) print "+ " $1; else if (old[$1] != $2) print "~ " $1 }
+    END { for (k in old) if (!(k in seen)) print "- " k }
+  ' "$oldmap" "$newmap" | sort >"$report"
+
+  if [ -s "$report" ]; then
+    cat "$report"
+    printf 'ores-sops: + added, - removed, ~ value changed (values intentionally hidden)\n'
+    return 1
+  fi
+  printf 'ores-sops: no local edits\n'
+}
+
 cmd_status() {
   local name mark active
   active="$(active_name || true)"
@@ -335,7 +385,8 @@ cmd_verify() {
 }
 
 cmd_install_hooks() {
-  local root hooks marker hook file path
+  local quiet=0 root hooks marker hook file path
+  [ "${1:-}" = "--quiet" ] && quiet=1
   root="$(repo_root)"
   hooks="$(git -C "$root" rev-parse --git-path hooks)"
   case "$hooks" in /*) ;; *) hooks="$root/$hooks" ;; esac
@@ -347,7 +398,7 @@ cmd_install_hooks() {
   for hook in post-merge post-checkout post-rewrite; do
     file="$hooks/$hook"
     if [ -e "$file" ] && ! grep -qF "$marker" "$file" 2>/dev/null; then
-      printf 'ores-sops: %s exists and is unmanaged; leaving it alone\n' "$hook" >&2
+      [ "$quiet" = 1 ] || printf 'ores-sops: %s exists and is unmanaged; leaving it alone\n' "$hook" >&2
       continue
     fi
     cat >"$file" <<EOF_HOOK
@@ -361,7 +412,7 @@ EOF_HOOK
 
   file="$hooks/pre-commit"
   if [ -e "$file" ] && ! grep -qF "$marker" "$file" 2>/dev/null; then
-    printf 'ores-sops: pre-commit exists and is unmanaged; leaving it alone\n' >&2
+    [ "$quiet" = 1 ] || printf 'ores-sops: pre-commit exists and is unmanaged; leaving it alone\n' >&2
   else
     cat >"$file" <<EOF_HOOK
 #!/usr/bin/env bash
@@ -444,6 +495,7 @@ ores-sops — ORESoftware SOPS dotenv convention
   use dev|prod [-f]       atomically decrypt and point .env at it
   encrypt dev|prod        encrypt managed plaintext back to .env.enc
   edit dev|prod           edit ciphertext through SOPS
+  diff dev|prod           report changed key names only; never print values
   status                  show non-secret local state
   refresh                 refresh active plaintext after ciphertext changes
   verify                  keyless policy checks; set ORES_SOPS_VERIFY_DECRYPT=1 for decrypt checks
@@ -467,6 +519,7 @@ main() {
     use) cmd_use "$@" ;;
     encrypt) cmd_encrypt "$@" ;;
     edit) cmd_edit "$@" ;;
+    diff) cmd_diff "$@" ;;
     status) cmd_status "$@" ;;
     refresh) cmd_refresh "$@" ;;
     verify) cmd_verify "$@" ;;
