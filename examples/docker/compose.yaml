@@ -1,0 +1,36 @@
+# Two ways to get the key into the container at run time. Both keep the key out
+# of the image and out of the build.
+#
+#   docker compose up
+#
+# The image is identical in every environment; only the key and the ciphertext
+# it can open differ. That is the point: no per-environment image builds.
+
+services:
+  # 1. Key as an environment variable. Simplest, and how most orchestrators
+  #    inject secrets (ECS/Fargate task secrets, Kubernetes env-from-secret,
+  #    Fly/Render/Railway secret stores).
+  app:
+    build: .
+    environment:
+      # Read from the operator's shell, never committed. With compose, put it in
+      # a local .env file (gitignored) or export it before `docker compose up`.
+      SOPS_AGE_KEY: ${SOPS_AGE_KEY:?set SOPS_AGE_KEY, e.g. export SOPS_AGE_KEY="$(cat ~/.config/sops/age/keys.txt)"}
+      SOPS_SECRETS_FILE: /app/secrets/app.env
+
+  # 2. Key as a mounted file. Preferable where the platform has a real secret
+  #    store: docker/compose secrets land on tmpfs at /run/secrets, so the key
+  #    is never on a writable layer and never in `docker inspect` output — an
+  #    environment variable is visible to anyone who can inspect the container.
+  app-file-key:
+    build: .
+    environment:
+      SOPS_AGE_KEY_FILE: /run/secrets/age_key
+      SOPS_SECRETS_FILE: /app/secrets/app.env
+    secrets:
+      - age_key
+
+secrets:
+  age_key:
+    # Host path to the private key. Never commit this file.
+    file: ${HOME}/.config/sops/age/keys.txt
