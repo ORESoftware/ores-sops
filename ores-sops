@@ -15,7 +15,7 @@
 
 set -euo pipefail
 
-VERSION="0.2.2"
+VERSION="0.2.3"
 DOTENV=(--input-type dotenv --output-type dotenv)
 
 fail() {
@@ -200,7 +200,7 @@ fingerprint_dotenv() {
 }
 
 cmd_diff() {
-  local name="${1:-}" src dst dir baseline report
+  local name="${1:-}" src dst dir baseline cleanup report
   need_env "$name"
   src="$(enc_path "$name")"
   dst="$(dec_path "$name")"
@@ -210,7 +210,8 @@ cmd_diff() {
   dir="$(dirname "$dst")"
   umask 077
   baseline="$(mktemp "$dir/.${name}.diff-base.XXXXXX")"
-  trap 'rm -f "$baseline"' EXIT
+  printf -v cleanup 'rm -f -- %q' "$baseline"
+  trap "$cleanup" EXIT
 
   if ! sops decrypt "${DOTENV[@]}" "$src" >"$baseline"; then
     fail "could not decrypt '$name' for diff"
@@ -224,6 +225,8 @@ cmd_diff() {
     ' <(fingerprint_dotenv "$baseline") <(fingerprint_dotenv "$dst")
   } | sort)"
 
+  rm -f -- "$baseline"
+  trap - EXIT
   if [ -n "$report" ]; then
     printf '%s\n' "$report"
     printf 'ores-sops: + added, - removed, ~ value changed (values intentionally hidden)\n'
@@ -382,7 +385,7 @@ cmd_verify() {
 }
 
 cmd_install_hooks() {
-  local quiet=0 root hooks marker hook file path
+  local quiet=0 root hooks marker hook file path bash_path
   [ "${1:-}" = "--quiet" ] && quiet=1
   root="$(repo_root)"
   hooks="$(git -C "$root" rev-parse --git-path hooks)"
@@ -391,6 +394,8 @@ cmd_install_hooks() {
   marker="# managed by ores-sops"
   path="$(command -v ores-sops 2>/dev/null || true)"
   [ -n "$path" ] || path="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/$(basename -- "${BASH_SOURCE[0]}")"
+  bash_path="$(command -v bash 2>/dev/null || true)"
+  [ -n "$bash_path" ] || fail "bash is required to install hooks"
 
   for hook in post-merge post-checkout post-rewrite; do
     file="$hooks/$hook"
@@ -399,7 +404,7 @@ cmd_install_hooks() {
       continue
     fi
     cat >"$file" <<EOF_HOOK
-#!/usr/bin/env bash
+#!$bash_path
 $marker
 "$path" refresh --quiet || true
 exit 0
@@ -412,7 +417,7 @@ EOF_HOOK
     [ "$quiet" = 1 ] || printf 'ores-sops: pre-commit exists and is unmanaged; leaving it alone\n' >&2
   else
     cat >"$file" <<EOF_HOOK
-#!/usr/bin/env bash
+#!$bash_path
 $marker
 "$path" precommit
 EOF_HOOK
