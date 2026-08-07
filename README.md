@@ -102,6 +102,20 @@ secret could not be decrypted is worse than stale plaintext. They also leave any
 pre-existing hook they did not write alone, and `.git/hooks` is not shared by
 git, so each clone installs them once (the devShell hook does this).
 
+## Containers
+
+Decrypt at `docker run`, never at `docker build` — a secret decrypted during a
+build is written into an image layer and stays there, recoverable by anyone who
+can pull the image.
+
+`ENTRYPOINT` is a shell script that decrypts into its own environment and then
+`exec "$@"`s `CMD`, so the application becomes PID 1 and receives `SIGTERM`
+directly. A working, tested example lives in
+[`examples/docker/`](examples/docker/): Dockerfile, entrypoint, compose file,
+and the reasoning — including why `exec sops exec-env your-app` looks right and
+breaks graceful shutdown, why values are parsed with `read`/`export` rather than
+`eval`, and the `sops exec-env` filename gotcha.
+
 ## Why dotenv, and what a reviewer sees
 
 For dotenv files sops encrypts **values** and leaves variable **names** readable:
