@@ -15,7 +15,7 @@
 
 set -euo pipefail
 
-VERSION="0.2.1"
+VERSION="0.2.2"
 DOTENV=(--input-type dotenv --output-type dotenv)
 
 fail() {
@@ -200,7 +200,7 @@ fingerprint_dotenv() {
 }
 
 cmd_diff() {
-  local name="${1:-}" src dst dir baseline oldmap newmap report
+  local name="${1:-}" src dst dir baseline report
   need_env "$name"
   src="$(enc_path "$name")"
   dst="$(dec_path "$name")"
@@ -210,25 +210,22 @@ cmd_diff() {
   dir="$(dirname "$dst")"
   umask 077
   baseline="$(mktemp "$dir/.${name}.diff-base.XXXXXX")"
-  oldmap="$(mktemp "$dir/.${name}.diff-old.XXXXXX")"
-  newmap="$(mktemp "$dir/.${name}.diff-new.XXXXXX")"
-  report="$(mktemp "$dir/.${name}.diff-report.XXXXXX")"
-  trap 'rm -f "$baseline" "$oldmap" "$newmap" "$report"' RETURN
+  trap 'rm -f "$baseline"' EXIT
 
   if ! sops decrypt "${DOTENV[@]}" "$src" >"$baseline"; then
     fail "could not decrypt '$name' for diff"
   fi
-  fingerprint_dotenv "$baseline" >"$oldmap"
-  fingerprint_dotenv "$dst" >"$newmap"
 
-  awk -F '\t' '
-    NR==FNR { old[$1]=$2; next }
-    { seen[$1]=1; if (!($1 in old)) print "+ " $1; else if (old[$1] != $2) print "~ " $1 }
-    END { for (k in old) if (!(k in seen)) print "- " k }
-  ' "$oldmap" "$newmap" | sort >"$report"
+  report="$({
+    awk -F '\t' '
+      NR==FNR { old[$1]=$2; next }
+      { seen[$1]=1; if (!($1 in old)) print "+ " $1; else if (old[$1] != $2) print "~ " $1 }
+      END { for (k in old) if (!(k in seen)) print "- " k }
+    ' <(fingerprint_dotenv "$baseline") <(fingerprint_dotenv "$dst")
+  } | sort)"
 
-  if [ -s "$report" ]; then
-    cat "$report"
+  if [ -n "$report" ]; then
+    printf '%s\n' "$report"
     printf 'ores-sops: + added, - removed, ~ value changed (values intentionally hidden)\n'
     return 1
   fi
