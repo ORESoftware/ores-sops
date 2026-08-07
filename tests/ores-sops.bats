@@ -198,6 +198,71 @@ EOF
   ! git check-ignore -q env/enc/prod.env.enc
 }
 
+@test "pre-commit BLOCKS a staged plaintext env file" {
+  ores-sops install-hooks --quiet
+  ores-sops use app
+  # Force past .gitignore, the way someone would with `git add -f`.
+  git add -f env/dec/app.env
+  run git commit -qm "oops"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"BLOCKED"* ]]
+  # Nothing was committed.
+  run git log --oneline -1
+  [[ "$output" == *"baseline"* ]]
+}
+
+@test "pre-commit BLOCKS a staged root .env" {
+  ores-sops install-hooks --quiet
+  printf 'SECRET=leaked\n' > .env
+  git add -f .env
+  run git commit -qm "oops"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"BLOCKED"* ]]
+}
+
+@test "pre-commit does NOT block committing ciphertext" {
+  ores-sops install-hooks --quiet
+  ores-sops use app
+  printf 'ALPHA=one\nBRAVO=v2\n' > env/dec/app.env
+  ores-sops encrypt app >/dev/null
+  git add env/enc/app.env.enc
+  run git commit -qm "update secret"
+  [ "$status" -eq 0 ]
+}
+
+@test "pre-commit WARNS when input differs from committed output, but allows it" {
+  ores-sops install-hooks --quiet
+  ores-sops use app
+  # Edit the plaintext input without encrypting it.
+  printf 'ALPHA=one\nBRAVO=not_yet_encrypted\n' > env/dec/app.env
+  # Commit something unrelated.
+  printf 'hello\n' > README.md
+  git add README.md
+  run git commit -m "unrelated change"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"WARNING"* ]]
+  [[ "$output" == *"differs from"* ]]
+}
+
+@test "pre-commit is silent when input and output agree" {
+  ores-sops install-hooks --quiet
+  ores-sops use app
+  printf 'hello\n' > README.md
+  git add README.md
+  run git commit -m "unrelated change"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"WARNING"* ]]
+  [[ "$output" != *"BLOCKED"* ]]
+}
+
+@test "install-hooks leaves a pre-existing foreign pre-commit alone" {
+  mkdir -p .git/hooks
+  printf '#!/bin/sh\nexit 0\n' > .git/hooks/pre-commit
+  chmod +x .git/hooks/pre-commit
+  run ores-sops install-hooks
+  [[ "$output" == *"pre-commit exists and is not ours"* ]]
+}
+
 @test "unknown command fails closed" {
   run ores-sops not-a-command
   [ "$status" -ne 0 ]
