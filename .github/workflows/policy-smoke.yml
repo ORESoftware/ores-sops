@@ -60,3 +60,15 @@ jobs:
             fi
             grep -q "unsupported environment 'app'" /tmp/ores-sops-app.out
           )
+
+  full-nix:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@v22
+
+      - name: Full flake checks
+        run: nix flake check -L
