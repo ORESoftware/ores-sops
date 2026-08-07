@@ -123,6 +123,8 @@ cmd_use() {
 }
 
 cmd_encrypt() {
+  local allow_empty=0
+  if [ "${1:-}" = "--allow-empty" ]; then allow_empty=1; shift; fi
   need_name "${1:-}"
   local root src dst
   root="$(repo_root)"
