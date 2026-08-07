@@ -196,6 +196,55 @@ cmd_refresh() {
   printf 'ores-sops: refreshed env/dec/%s.env\n' "$name"
 }
 
+# Called by the pre-commit hook. Two different severities on purpose:
+#
+#   BLOCK  a plaintext env file is staged. There is no good reason for this and
+#          the cost of getting it wrong is a leaked credential in history, so it
+#          stops the commit.
+#   WARN   env/dec/<name>.env differs from the ciphertext you are committing.
+#          Your input and your output disagree — usually you edited the
+#          plaintext and forgot `ores-sops encrypt`. It only warns, because the
+#          commit may be entirely unrelated to secrets and blocking it would be
+#          wrong.
+cmd_precommit() {
+  local root staged blocked=0 name enc
+  root="$(repo_root)"
+
+  staged="$(git -C "$root" diff --cached --name-only --diff-filter=AM 2>/dev/null || true)"
+
+  # Plaintext by path convention or by name, but never the ciphertext itself.
+  local f
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    case "$f" in
+      *.env.enc) continue ;;
+      .env | *.env | env/dec/*)
+        printf 'ores-sops: BLOCKED — plaintext env file staged: %s\n' "$f" >&2
+        blocked=1
+        ;;
+    esac
+  done <<<"$staged"
+
+  if [ "$blocked" = 1 ]; then
+    printf '\n  Unstage it:  git restore --staged <file>\n' >&2
+    printf '  These belong in env/enc/*.env.enc via: ores-sops encrypt <name>\n' >&2
+    return 1
+  fi
+
+  # Warn when the decrypted input no longer matches the committed output.
+  for enc in "$root"/env/enc/*.env.enc; do
+    [ -e "$enc" ] || continue
+    name="$(basename "$enc" .env.enc)"
+    if has_local_edits "$name"; then
+      printf 'ores-sops: WARNING — env/dec/%s.env differs from env/enc/%s.env.enc\n' "$name" "$name" >&2
+      printf '           your plaintext edits are NOT in this commit.\n' >&2
+      printf '           include them:  ores-sops encrypt %s && git add env/enc/%s.env.enc\n' "$name" "$name" >&2
+      printf '           see them:      ores-sops diff %s\n' "$name" >&2
+    fi
+  done
+  return 0
+}
+
 cmd_status() {
   local root enc name any=0
   root="$(repo_root)"
