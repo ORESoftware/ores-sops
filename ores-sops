@@ -15,7 +15,7 @@
 
 set -euo pipefail
 
-VERSION="0.2.3"
+VERSION="0.3.1"
 DOTENV=(--input-type dotenv --output-type dotenv)
 
 fail() {
@@ -25,6 +25,10 @@ fail() {
 
 repo_root() {
   git rev-parse --show-toplevel 2>/dev/null || fail "not inside a git repository"
+}
+
+log_path() {
+  printf '%q' "$1"
 }
 
 need_env() {
@@ -39,6 +43,44 @@ enc_path() { need_env "$1"; printf '%s/env/enc/%s.env.enc' "$(repo_root)" "$1"; 
 dec_path() { need_env "$1"; printf '%s/env/dec/%s.env' "$(repo_root)" "$1"; }
 stamp_path() { need_env "$1"; printf '%s/env/dec/.%s.env.sha256' "$(repo_root)" "$1"; }
 
+assert_not_symlink() {
+  local path="$1" label="${2:-path}"
+  [ ! -L "$path" ] || fail "$label must not be a symlink: $(log_path "$path")"
+}
+
+assert_managed_tree_safe() {
+  local root rel path
+  root="$(repo_root)"
+  for rel in env env/enc env/dec; do
+    path="$root/$rel"
+    assert_not_symlink "$path" "managed path"
+    if [ -e "$path" ] && [ ! -d "$path" ]; then
+      fail "managed path must be a directory: $(log_path "$path")"
+    fi
+  done
+}
+
+prepare_managed_tree() {
+  local root
+  root="$(repo_root)"
+  assert_managed_tree_safe
+  mkdir -p "$root/env/enc" "$root/env/dec"
+  chmod 700 "$root/env/dec"
+}
+
+assert_managed_file_safe() {
+  local path="$1"
+  assert_not_symlink "$path" "managed file"
+}
+
+assert_policy_path_safe() {
+  local root path
+  root="$(repo_root)"
+  for path in "$root/.sops.yaml" "$root/.gitignore" "$root/.gitattributes" "$root/.env.example"; do
+    assert_not_symlink "$path" "policy file"
+  done
+}
+
 sha256_stdin() {
   if command -v sha256sum >/dev/null 2>&1; then
     sha256sum | awk '{print $1}'
@@ -47,33 +89,73 @@ sha256_stdin() {
   fi
 }
 
+validate_dotenv_file() {
+  local file="$1" rc
+  if awk '
+    /^[[:space:]]*$/ || /^[[:space:]]*#/ { next }
+    /^[A-Za-z_][A-Za-z0-9_]*=/ {
+      key=$0
+      sub(/=.*/, "", key)
+      if (seen[key]++) duplicate=1
+      next
+    }
+    { malformed=1 }
+    END {
+      if (malformed) exit 2
+      if (duplicate) exit 3
+    }
+  ' "$file"; then
+    return 0
+  else
+    rc=$?
+  fi
+  case "$rc" in
+    0) return 0 ;;
+    2) fail "dotenv contains a malformed non-comment line: $(log_path "$file")" ;;
+    3) fail "dotenv contains duplicate variable names: $(log_path "$file")" ;;
+    *) fail "could not validate dotenv file: $(log_path "$file")" ;;
+  esac
+}
+
 record_stamp() {
   local name="$1" stamp tmp
   stamp="$(stamp_path "$name")"
+  assert_managed_file_safe "$stamp"
   umask 077
   tmp="$(mktemp "$(dirname "$stamp")/.${name}.stamp.XXXXXX")"
+  trap 'rm -f -- "$tmp"' EXIT
+  trap 'rm -f -- "$tmp"; exit 130' HUP INT TERM
   sha256_stdin <"$(dec_path "$name")" >"$tmp"
   chmod 600 "$tmp"
   mv -f "$tmp" "$stamp"
+  trap - EXIT HUP INT TERM
 }
 
 has_local_edits() {
-  local name="$1" dst stamp
+  local name="$1" src dst stamp
+  src="$(enc_path "$name")"
   dst="$(dec_path "$name")"
   stamp="$(stamp_path "$name")"
+  assert_managed_tree_safe
+  assert_managed_file_safe "$src"
+  assert_managed_file_safe "$dst"
+  assert_managed_file_safe "$stamp"
   [ -f "$dst" ] || return 1
   if [ -f "$stamp" ]; then
     [ "$(sha256_stdin <"$dst")" != "$(cat "$stamp")" ]
     return
   fi
-  [ -f "$(enc_path "$name")" ] || return 1
-  ! sops decrypt "${DOTENV[@]}" "$(enc_path "$name")" 2>/dev/null | diff -q - "$dst" >/dev/null 2>&1
+  [ -f "$src" ] || return 1
+  ! sops decrypt "${DOTENV[@]}" "$src" 2>/dev/null | diff -q - "$dst" >/dev/null 2>&1
 }
 
 ciphertext_differs() {
   local name="$1" src dst
   src="$(enc_path "$name")"
   dst="$(dec_path "$name")"
+  assert_managed_tree_safe
+  assert_managed_file_safe "$src"
+  assert_managed_file_safe "$dst"
   [ -f "$src" ] || return 1
   [ -f "$dst" ] || return 0
   ! sops decrypt "${DOTENV[@]}" "$src" 2>/dev/null | diff -q - "$dst" >/dev/null 2>&1
@@ -107,19 +189,24 @@ assert_root_env_manageable() {
 write_plaintext() {
   local name="$1" src dst dir tmp
   need_env "$name"
+  prepare_managed_tree
   src="$(enc_path "$name")"
   dst="$(dec_path "$name")"
   dir="$(dirname "$dst")"
+  assert_managed_file_safe "$src"
+  assert_managed_file_safe "$dst"
   [ -f "$src" ] || fail "missing env/enc/$name.env.enc"
-  mkdir -p "$dir"
   umask 077
   tmp="$(mktemp "$dir/.${name}.env.tmp.XXXXXX")"
+  trap 'rm -f -- "$tmp"' EXIT
+  trap 'rm -f -- "$tmp"; exit 130' HUP INT TERM
   if ! sops decrypt "${DOTENV[@]}" "$src" >"$tmp"; then
-    rm -f "$tmp"
     fail "could not decrypt '$name' — is your identity an authorized recipient?"
   fi
+  validate_dotenv_file "$tmp"
   chmod 600 "$tmp"
   mv -f "$tmp" "$dst"
+  trap - EXIT HUP INT TERM
   record_stamp "$name"
 }
 
@@ -127,9 +214,10 @@ activate_link() {
   local name="$1" root tmp
   need_env "$name"
   root="$(repo_root)"
+  prepare_managed_tree
   assert_root_env_manageable
-  tmp="$root/.env.ores-sops.$$"
-  rm -f "$tmp"
+  tmp="$(mktemp "$root/.env.ores-sops.XXXXXX")"
+  rm -f -- "$tmp"
   ln -s "env/dec/$name.env" "$tmp"
   mv -f "$tmp" "$root/.env"
 }
@@ -139,6 +227,8 @@ cmd_use() {
   if [ "${1:-}" = "--force" ] || [ "${1:-}" = "-f" ]; then force=1; shift; fi
   name="${1:-}"
   need_env "$name"
+  prepare_managed_tree
+  assert_managed_file_safe "$(enc_path "$name")"
   [ -f "$(enc_path "$name")" ] || fail "missing env/enc/$name.env.enc"
   if [ "$force" = 0 ] && has_local_edits "$name"; then
     fail "env/dec/$name.env has local edits; encrypt them or use --force to discard them"
@@ -149,40 +239,49 @@ cmd_use() {
 }
 
 cmd_encrypt() {
-  local allow_empty=0 name root src_rel dst_rel dst tmp
+  local allow_empty=0 name root src_rel dst_rel src dst tmp
   if [ "${1:-}" = "--allow-empty" ]; then allow_empty=1; shift; fi
   name="${1:-}"
   need_env "$name"
+  prepare_managed_tree
   root="$(repo_root)"
   src_rel="env/dec/$name.env"
   dst_rel="env/enc/$name.env.enc"
+  src="$root/$src_rel"
   dst="$root/$dst_rel"
-  [ -f "$root/$src_rel" ] || fail "missing $src_rel"
+  assert_managed_file_safe "$src"
+  assert_managed_file_safe "$dst"
+  [ -f "$src" ] || fail "missing $src_rel"
+  validate_dotenv_file "$src"
 
   if [ "$allow_empty" = 0 ] &&
-     { [ ! -s "$root/$src_rel" ] || ! grep -qE '^[A-Za-z_][A-Za-z0-9_]*=' "$root/$src_rel"; }; then
+     { [ ! -s "$src" ] || ! grep -qE '^[A-Za-z_][A-Za-z0-9_]*=' "$src"; }; then
     if [ -s "$dst" ]; then
       fail "$src_rel has no variables; refusing to replace existing ciphertext (use --allow-empty to confirm)"
     fi
   fi
 
-  mkdir -p "$root/env/enc"
   umask 077
   tmp="$(mktemp "$root/env/enc/.${name}.env.enc.tmp.XXXXXX")"
+  trap 'rm -f -- "$tmp"' EXIT
+  trap 'rm -f -- "$tmp"; exit 130' HUP INT TERM
   if ! (cd "$root" && sops encrypt "${DOTENV[@]}" --filename-override "$dst_rel" "$src_rel") >"$tmp"; then
-    rm -f "$tmp"
     fail "could not encrypt '$name'; check the exact creation rule in .sops.yaml"
   fi
   mv -f "$tmp" "$dst"
+  trap - EXIT HUP INT TERM
   write_plaintext "$name"
   printf 'ores-sops: encrypted -> %s\n' "$dst_rel"
 }
 
 cmd_edit() {
-  local name="${1:-}"
+  local name="${1:-}" src
   need_env "$name"
-  [ -f "$(enc_path "$name")" ] || fail "missing env/enc/$name.env.enc"
-  sops edit "${DOTENV[@]}" "$(enc_path "$name")"
+  assert_managed_tree_safe
+  src="$(enc_path "$name")"
+  assert_managed_file_safe "$src"
+  [ -f "$src" ] || fail "missing env/enc/$name.env.enc"
+  sops edit "${DOTENV[@]}" "$src"
 }
 
 fingerprint_dotenv() {
@@ -200,22 +299,27 @@ fingerprint_dotenv() {
 }
 
 cmd_diff() {
-  local name="${1:-}" src dst dir baseline cleanup report
+  local name="${1:-}" src dst dir baseline report
   need_env "$name"
+  assert_managed_tree_safe
   src="$(enc_path "$name")"
   dst="$(dec_path "$name")"
+  assert_managed_file_safe "$src"
+  assert_managed_file_safe "$dst"
   [ -f "$src" ] || fail "missing env/enc/$name.env.enc"
   [ -f "$dst" ] || fail "missing env/dec/$name.env; run ores-sops use $name first"
+  validate_dotenv_file "$dst"
 
   dir="$(dirname "$dst")"
   umask 077
   baseline="$(mktemp "$dir/.${name}.diff-base.XXXXXX")"
-  printf -v cleanup 'rm -f -- %q' "$baseline"
-  trap "$cleanup" EXIT
+  trap 'rm -f -- "$baseline"' EXIT
+  trap 'rm -f -- "$baseline"; exit 130' HUP INT TERM
 
   if ! sops decrypt "${DOTENV[@]}" "$src" >"$baseline"; then
     fail "could not decrypt '$name' for diff"
   fi
+  validate_dotenv_file "$baseline"
 
   report="$({
     awk -F '\t' '
@@ -226,7 +330,7 @@ cmd_diff() {
   } | sort)"
 
   rm -f -- "$baseline"
-  trap - EXIT
+  trap - EXIT HUP INT TERM
   if [ -n "$report" ]; then
     printf '%s\n' "$report"
     printf 'ores-sops: + added, - removed, ~ value changed (values intentionally hidden)\n'
@@ -237,8 +341,11 @@ cmd_diff() {
 
 cmd_status() {
   local name mark active
+  assert_managed_tree_safe
   active="$(active_name || true)"
   for name in dev prod; do
+    assert_managed_file_safe "$(enc_path "$name")"
+    assert_managed_file_safe "$(dec_path "$name")"
     mark="  "
     [ "$active" = "$name" ] && mark="* "
     if [ ! -f "$(enc_path "$name")" ]; then
@@ -258,6 +365,7 @@ cmd_status() {
 cmd_refresh() {
   local quiet=0 name
   [ "${1:-}" = "--quiet" ] && quiet=1
+  assert_managed_tree_safe
   name="$(active_name || true)"
   [ -n "$name" ] || return 0
   [ -f "$(enc_path "$name")" ] || return 0
@@ -275,8 +383,9 @@ cmd_refresh() {
 }
 
 cmd_lock() {
-  local root target name
+  local root target name f
   root="$(repo_root)"
+  assert_managed_tree_safe
   if [ -L "$root/.env" ]; then
     target="$(readlink "$root/.env")"
     case "$target" in
@@ -287,39 +396,60 @@ cmd_lock() {
     fail "refusing to remove unmanaged root .env"
   fi
   for name in dev prod; do
+    assert_managed_file_safe "$(dec_path "$name")"
+    assert_managed_file_safe "$(stamp_path "$name")"
     rm -f "$(dec_path "$name")" "$(stamp_path "$name")"
   done
-  printf 'ores-sops: removed managed plaintext and root .env symlink\n'
+  for f in \
+    "$root"/env/dec/.dev.env.tmp.* "$root"/env/dec/.prod.env.tmp.* \
+    "$root"/env/dec/.dev.diff-base.* "$root"/env/dec/.prod.diff-base.* \
+    "$root"/env/dec/.dev.stamp.* "$root"/env/dec/.prod.stamp.*; do
+    [ -e "$f" ] || [ -L "$f" ] || continue
+    rm -f -- "$f"
+  done
+  printf 'ores-sops: removed managed plaintext, temp state, and root .env symlink\n'
 }
 
 is_plaintext_env_path() {
   case "$1" in
     .env.example|*/.env.example) return 1 ;;
-    .env|*.env|.env.*|*/.env.*|env/dec/*) return 0 ;;
+    .env|*.env|.env.*|*.env.*|env/dec/*) return 0 ;;
     *) return 1 ;;
   esac
 }
 
 cmd_precommit() {
-  local root staged f blocked=0
+  local root f blocked=0 mode shown
   root="$(repo_root)"
-  staged="$(git -C "$root" diff --cached --name-only --diff-filter=AM 2>/dev/null || true)"
-  while IFS= read -r f; do
+  while IFS= read -r -d '' f; do
     [ -n "$f" ] || continue
+    mode="$(git -C "$root" ls-files -s -- "$f" | awk 'NR==1 { print $1 }')"
+    shown="$(log_path "$f")"
     case "$f" in
-      env/enc/dev.env.enc|env/enc/prod.env.enc) ;;
+      env/enc/dev.env.enc|env/enc/prod.env.enc)
+        if [ "$mode" = "120000" ]; then
+          printf 'ores-sops: BLOCKED — approved ciphertext path is a symlink: %s\n' "$shown" >&2
+          blocked=1
+        fi
+        ;;
       env/enc/*)
-        printf 'ores-sops: BLOCKED — unexpected tracked ciphertext path: %s\n' "$f" >&2
+        printf 'ores-sops: BLOCKED — unexpected tracked ciphertext path: %s\n' "$shown" >&2
         blocked=1
+        ;;
+      .sops.yaml|.gitignore|.gitattributes|.env.example)
+        if [ "$mode" = "120000" ]; then
+          printf 'ores-sops: BLOCKED — policy file must not be a symlink: %s\n' "$shown" >&2
+          blocked=1
+        fi
         ;;
       *)
         if is_plaintext_env_path "$f"; then
-          printf 'ores-sops: BLOCKED — plaintext dotenv path staged: %s\n' "$f" >&2
+          printf 'ores-sops: BLOCKED — plaintext dotenv path staged: %s\n' "$shown" >&2
           blocked=1
         fi
         ;;
     esac
-  done <<<"$staged"
+  done < <(git -C "$root" diff --cached --name-only -z --diff-filter=ACMRTUXB 2>/dev/null || true)
   [ "$blocked" = 0 ] || return 1
 }
 
@@ -333,29 +463,103 @@ check_not_ignored() {
   fi
 }
 
-cmd_verify() {
-  local root unexpected plaintext name file mode target
+verify_ciphertext_file() {
+  local file="$1" line key value saw_mac=0 shown
+  assert_managed_file_safe "$file"
+  [ -f "$file" ] || return 0
+  shown="$(log_path "$file")"
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      sops_mac=ENC\[*) saw_mac=1 ;;
+      [A-Za-z_][A-Za-z0-9_]*=*)
+        key="${line%%=*}"
+        value="${line#*=}"
+        case "$key" in
+          sops_*) ;;
+          *)
+            case "$value" in
+              ENC\[*) ;;
+              *) fail "approved ciphertext contains an obvious plaintext assignment: $shown" ;;
+            esac
+            ;;
+        esac
+        ;;
+    esac
+  done <"$file"
+  [ "$saw_mac" = 1 ] || fail "$shown does not look like SOPS dotenv ciphertext"
+}
+
+verify_sops_rules() {
+  local root line trimmed rule
   root="$(repo_root)"
+  grep -Fq 'path_regex: ^env/enc/dev\.env\.enc$' "$root/.sops.yaml" || fail "missing exact dev SOPS creation rule"
+  grep -Fq 'path_regex: ^env/enc/prod\.env\.enc$' "$root/.sops.yaml" || fail "missing exact prod SOPS creation rule"
+  while IFS= read -r line || [ -n "$line" ]; do
+    trimmed="${line#"${line%%[![:space:]]*}"}"
+    rule="$trimmed"
+    case "$rule" in
+      '- '*) rule="${rule#- }" ;;
+    esac
+    case "$rule" in
+      'path_regex: ^env/enc/dev\.env\.enc$'|'path_regex: ^env/enc/prod\.env\.enc$') ;;
+      path_regex:*env/enc*) fail "broad or noncanonical env/enc SOPS creation rule is not allowed" ;;
+    esac
+  done <"$root/.sops.yaml"
+}
+
+verify_no_private_material() {
+  local root age_marker pem_marker openssh_marker
+  root="$(repo_root)"
+  age_marker='AGE-SE''CRET-KEY-1'
+  pem_marker='-----BEGIN ''PRIVATE KEY-----'
+  openssh_marker='-----BEGIN OPENSSH ''PRIVATE KEY-----'
+  if git -C "$root" grep -I -q -e "$age_marker" -e "$pem_marker" -e "$openssh_marker" -- .; then
+    fail "tracked files contain private key material"
+  fi
+}
+
+cmd_verify() {
+  local root name file mode target f shown
+  root="$(repo_root)"
+  assert_managed_tree_safe
+  assert_policy_path_safe
   [ -f "$root/.gitignore" ] || fail "missing .gitignore"
+  [ -f "$root/.gitattributes" ] || fail "missing .gitattributes"
   [ -f "$root/.sops.yaml" ] || fail "missing .sops.yaml"
 
   check_ignored ".env"
   check_ignored "sample.env"
+  check_ignored "sample.env.local"
   check_ignored "nested/sample.env"
+  check_ignored "nested/sample.env.local"
   check_ignored "nested/deeper/sample.env"
   check_ignored "env/dec/dev.env"
   check_ignored "env/dec/prod.env"
   check_not_ignored "env/enc/dev.env.enc"
   check_not_ignored "env/enc/prod.env.enc"
 
-  unexpected="$(git -C "$root" ls-files 'env/enc/*' | grep -Ev '^env/enc/(dev|prod)\.env\.enc$' || true)"
-  [ -z "$unexpected" ] || fail "unexpected tracked files under env/enc: $unexpected"
+  grep -Fq '/env/enc/*.env.enc text eol=lf' "$root/.gitattributes" || fail "missing ciphertext LF normalization in .gitattributes"
+  verify_sops_rules
+  verify_no_private_material
 
-  plaintext="$(git -C "$root" ls-files | grep -E '(^|/)([^/]*\.env|\.env\.[^/]+)$' | grep -Ev '(^|/)\.env\.example$' || true)"
-  [ -z "$plaintext" ] || fail "tracked plaintext dotenv paths found: $plaintext"
-
-  grep -Fq 'path_regex: ^env/enc/dev\.env\.enc$' "$root/.sops.yaml" || fail "missing exact dev SOPS creation rule"
-  grep -Fq 'path_regex: ^env/enc/prod\.env\.enc$' "$root/.sops.yaml" || fail "missing exact prod SOPS creation rule"
+  while IFS= read -r -d '' f; do
+    shown="$(log_path "$f")"
+    mode="$(git -C "$root" ls-files -s -- "$f" | awk 'NR==1 { print $1 }')"
+    case "$f" in
+      env/enc/dev.env.enc|env/enc/prod.env.enc)
+        [ "$mode" != "120000" ] || fail "approved ciphertext path is a tracked symlink: $shown"
+        ;;
+      env/enc/*) fail "unexpected tracked file under env/enc: $shown" ;;
+      .sops.yaml|.gitignore|.gitattributes|.env.example)
+        [ "$mode" != "120000" ] || fail "policy file is a tracked symlink: $shown"
+        ;;
+      *)
+        if is_plaintext_env_path "$f"; then
+          fail "tracked plaintext dotenv path found: $shown"
+        fi
+        ;;
+    esac
+  done < <(git -C "$root" ls-files -z)
 
   if [ -e "$root/.env" ] || [ -L "$root/.env" ]; then
     [ -L "$root/.env" ] || fail "root .env exists but is not a symlink"
@@ -366,18 +570,23 @@ cmd_verify() {
     esac
   fi
 
+  if [ -d "$root/env/dec" ]; then
+    mode="$(stat -c '%a' "$root/env/dec" 2>/dev/null || stat -f '%Lp' "$root/env/dec")"
+    [ "$mode" = "700" ] || fail "$root/env/dec must be mode 0700 (found $mode)"
+  fi
+
   for name in dev prod; do
     file="$(dec_path "$name")"
+    assert_managed_file_safe "$file"
     if [ -f "$file" ]; then
+      validate_dotenv_file "$file"
       mode="$(stat -c '%a' "$file" 2>/dev/null || stat -f '%Lp' "$file")"
       [ "$mode" = "600" ] || fail "$file must be mode 0600 (found $mode)"
     fi
     file="$(enc_path "$name")"
-    if [ -f "$file" ]; then
-      grep -q '^sops_mac=ENC\[' "$file" || fail "$file does not look like SOPS dotenv ciphertext"
-      if [ "${ORES_SOPS_VERIFY_DECRYPT:-0}" = "1" ]; then
-        sops decrypt "${DOTENV[@]}" "$file" >/dev/null || fail "authorized decrypt failed for $name"
-      fi
+    verify_ciphertext_file "$file"
+    if [ -f "$file" ] && [ "${ORES_SOPS_VERIFY_DECRYPT:-0}" = "1" ]; then
+      sops decrypt "${DOTENV[@]}" "$file" >/dev/null || fail "authorized decrypt failed for $name"
     fi
   done
 
@@ -385,20 +594,28 @@ cmd_verify() {
 }
 
 cmd_install_hooks() {
-  local quiet=0 root hooks marker hook file path bash_path
+  local quiet=0 root hooks marker hook file path bash_path quoted_path custom_hooks
   [ "${1:-}" = "--quiet" ] && quiet=1
   root="$(repo_root)"
+  custom_hooks="$(git -C "$root" config --path --get core.hooksPath 2>/dev/null || true)"
+  if [ -n "$custom_hooks" ] && [ "${ORES_SOPS_ALLOW_CUSTOM_HOOKS_PATH:-0}" != "1" ]; then
+    fail "refusing to write through custom core.hooksPath; set ORES_SOPS_ALLOW_CUSTOM_HOOKS_PATH=1 after reviewing it"
+  fi
   hooks="$(git -C "$root" rev-parse --git-path hooks)"
   case "$hooks" in /*) ;; *) hooks="$root/$hooks" ;; esac
+  assert_not_symlink "$hooks" "hooks directory"
   mkdir -p "$hooks"
   marker="# managed by ores-sops"
   path="$(command -v ores-sops 2>/dev/null || true)"
   [ -n "$path" ] || path="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/$(basename -- "${BASH_SOURCE[0]}")"
   bash_path="$(command -v bash 2>/dev/null || true)"
   [ -n "$bash_path" ] || fail "bash is required to install hooks"
+  case "$bash_path" in *$'\n'*|*$'\r'*|*$'\t'*|*' '*) fail "bash path is not safe for a shebang" ;; esac
+  printf -v quoted_path '%q' "$path"
 
   for hook in post-merge post-checkout post-rewrite; do
     file="$hooks/$hook"
+    [ ! -L "$file" ] || fail "refusing to overwrite symlinked hook: $(log_path "$file")"
     if [ -e "$file" ] && ! grep -qF "$marker" "$file" 2>/dev/null; then
       [ "$quiet" = 1 ] || printf 'ores-sops: %s exists and is unmanaged; leaving it alone\n' "$hook" >&2
       continue
@@ -406,20 +623,21 @@ cmd_install_hooks() {
     cat >"$file" <<EOF_HOOK
 #!$bash_path
 $marker
-"$path" refresh --quiet || true
+$quoted_path refresh --quiet || true
 exit 0
 EOF_HOOK
     chmod +x "$file"
   done
 
   file="$hooks/pre-commit"
+  [ ! -L "$file" ] || fail "refusing to overwrite symlinked hook: $(log_path "$file")"
   if [ -e "$file" ] && ! grep -qF "$marker" "$file" 2>/dev/null; then
     [ "$quiet" = 1 ] || printf 'ores-sops: pre-commit exists and is unmanaged; leaving it alone\n' >&2
   else
     cat >"$file" <<EOF_HOOK
 #!$bash_path
 $marker
-"$path" precommit
+$quoted_path precommit
 EOF_HOOK
     chmod +x "$file"
   fi
@@ -428,12 +646,12 @@ EOF_HOOK
 cmd_init() {
   local root key recipient ignore attrs
   root="$(repo_root)"
+  assert_policy_path_safe
+  prepare_managed_tree
   key="${SOPS_AGE_KEY_FILE:-$HOME/.config/sops/age/keys.txt}"
   [ -f "$key" ] || fail "no age identity at $key — create one with: age-keygen -o $key"
   recipient="$(grep -o 'age1[a-z0-9]\{58\}' "$key" | head -1)"
   [ -n "$recipient" ] || fail "no age recipient found in $key"
-
-  mkdir -p "$root/env/enc" "$root/env/dec"
 
   if [ ! -f "$root/.sops.yaml" ]; then
     cat >"$root/.sops.yaml" <<EOF_SOPS
@@ -456,11 +674,12 @@ EOF_SOPS
     cat >>"$ignore" <<'EOF_IGNORE'
 
 # BEGIN ores-sops dotenv policy
-# Plaintext dotenv is local-only at every depth.
+# Plaintext dotenv is local-only at every depth, including common suffix variants.
 *.env
 */*.env
 */**/*.env
 .env.*
+*.env.*
 !.env.example
 
 # Decrypted material is never tracked.
@@ -472,6 +691,8 @@ EOF_SOPS
 !/env/enc/prod.env.enc
 # END ores-sops dotenv policy
 EOF_IGNORE
+  elif ! grep -Fxq '*.env.*' "$ignore"; then
+    printf '\n# ores-sops hardening: ignore common dotenv suffix variants.\n*.env.*\n!/env/enc/dev.env.enc\n!/env/enc/prod.env.enc\n' >>"$ignore"
   fi
 
   attrs="$root/.gitattributes"
@@ -502,7 +723,7 @@ ores-sops — ORESoftware SOPS dotenv convention
   refresh                 refresh active plaintext after ciphertext changes
   verify                  keyless policy checks; set ORES_SOPS_VERIFY_DECRYPT=1 for decrypt checks
   precommit               block plaintext and unexpected env/enc paths
-  lock                    remove only managed plaintext and managed .env symlink
+  lock                    remove managed plaintext, temp state, and managed .env symlink
   install-hooks           install safe refresh/pre-commit hooks
 
 Tracked secret-bearing paths are exactly:
@@ -510,6 +731,8 @@ Tracked secret-bearing paths are exactly:
   env/enc/prod.env.enc
 
 Every SOPS operation uses explicit --input-type dotenv --output-type dotenv.
+Managed env/policy paths and hook files must not be symlinks.
+Custom core.hooksPath is refused unless explicitly opted in after review.
 EOF_USAGE
 }
 

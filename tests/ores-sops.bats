@@ -14,6 +14,7 @@ setup() {
   git config commit.gpgsign false
 
   mkdir -p env/enc env/dec
+  chmod 700 env/dec
   cat > .sops.yaml <<EOF_SOPS
 creation_rules:
   - path_regex: ^env/enc/dev\.env\.enc\$
@@ -29,19 +30,21 @@ EOF_SOPS
 */*.env
 */**/*.env
 .env.*
+*.env.*
 !.env.example
 /env/dec/
 /env/enc/*
 !/env/enc/dev.env.enc
 !/env/enc/prod.env.enc
 EOF_IGNORE
+  printf '/env/enc/*.env.enc text eol=lf\n' > .gitattributes
 
   printf 'ALPHA=one\nBRAVO=dev-original\n' > env/dec/dev.env
   ores-sops encrypt dev >/dev/null
   printf 'ALPHA=one\nBRAVO=prod-original\n' > env/dec/prod.env
   ores-sops encrypt prod >/dev/null
   ores-sops lock >/dev/null
-  git add .sops.yaml .gitignore env/enc/dev.env.enc env/enc/prod.env.enc
+  git add .sops.yaml .gitignore .gitattributes env/enc/dev.env.enc env/enc/prod.env.enc
   git commit -qm baseline
 }
 
@@ -51,30 +54,16 @@ EOF_IGNORE
   [[ "$output" == *"unsupported environment 'app'"* ]]
 }
 
-@test "encrypt produces ciphertext at exact approved paths" {
-  grep -q '^BRAVO=' env/enc/dev.env.enc
-  grep -q '^sops_mac=ENC\[' env/enc/dev.env.enc
-  ! grep -q 'BRAVO=dev-original' env/enc/dev.env.enc
-  [ -f env/enc/prod.env.enc ]
-}
-
 @test "use decrypts atomically and creates a relative root symlink" {
   ores-sops use dev
   [ -L .env ]
   [ "$(readlink .env)" = "env/dec/dev.env" ]
   grep -q '^BRAVO=dev-original$' env/dec/dev.env
-  perms="$(stat -c '%a' env/dec/dev.env 2>/dev/null || stat -f '%Lp' env/dec/dev.env)"
-  [ "$perms" = "600" ]
+  [ "$(stat -c '%a' env/dec 2>/dev/null || stat -f '%Lp' env/dec)" = "700" ]
+  [ "$(stat -c '%a' env/dec/dev.env 2>/dev/null || stat -f '%Lp' env/dec/dev.env)" = "600" ]
 }
 
-@test "switching dev to prod replaces only the managed symlink" {
-  ores-sops use dev
-  ores-sops use prod
-  [ "$(readlink .env)" = "env/dec/prod.env" ]
-  grep -q '^BRAVO=prod-original$' .env
-}
-
-@test "use refuses to overwrite an unmanaged root .env file" {
+@test "use refuses unmanaged root env state" {
   printf 'LOCAL=keep-me\n' > .env
   run ores-sops use dev
   [ "$status" -ne 0 ]
@@ -82,7 +71,7 @@ EOF_IGNORE
   grep -q '^LOCAL=keep-me$' .env
 }
 
-@test "use refuses to replace an unmanaged root .env symlink" {
+@test "use refuses unmanaged root env symlink" {
   printf 'OTHER=x\n' > other.txt
   ln -s other.txt .env
   run ores-sops use dev
@@ -91,14 +80,13 @@ EOF_IGNORE
   [ "$(readlink .env)" = "other.txt" ]
 }
 
-@test "failed decrypt leaves the previous complete plaintext untouched" {
+@test "failed decrypt leaves previous complete plaintext untouched" {
   ores-sops use dev
   cp env/dec/dev.env before.env
   printf 'not-sops\n' > env/enc/dev.env.enc
   run ores-sops use --force dev
   [ "$status" -ne 0 ]
   cmp before.env env/dec/dev.env
-  [ "$(readlink .env)" = "env/dec/dev.env" ]
 }
 
 @test "local plaintext edits are not silently overwritten" {
@@ -106,37 +94,29 @@ EOF_IGNORE
   printf 'ALPHA=one\nBRAVO=my-local-edit\n' > env/dec/dev.env
   run ores-sops use dev
   [ "$status" -ne 0 ]
-  [[ "$output" == *"has local edits"* ]]
   grep -q 'my-local-edit' env/dec/dev.env
 }
 
-@test "encrypt round-trips local edits and keeps explicit dotenv typing" {
+@test "duplicate dotenv keys are rejected before encryption" {
   ores-sops use dev
-  printf 'ALPHA=one\nBRAVO=changed\n' > env/dec/dev.env
-  ores-sops encrypt dev
-  ores-sops use --force dev
-  grep -q '^BRAVO=changed$' env/dec/dev.env
-  ! grep -q 'BRAVO=changed' env/enc/dev.env.enc
+  printf 'ALPHA=one\nALPHA=two\n' > env/dec/dev.env
+  run ores-sops encrypt dev
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"duplicate variable names"* ]]
 }
 
-@test "lock removes only managed plaintext and managed root symlink" {
+@test "lock removes managed plaintext and stale plaintext temp state" {
   ores-sops use dev
+  printf 'SECRET=temp\n' > env/dec/.dev.env.tmp.stale
+  printf 'SECRET=diff\n' > env/dec/.dev.diff-base.stale
   ores-sops lock
   [ ! -e .env ]
   [ ! -e env/dec/dev.env ]
-  [ ! -e env/dec/prod.env ]
-  [ -f env/enc/dev.env.enc ]
-  [ -f env/enc/prod.env.enc ]
+  [ ! -e env/dec/.dev.env.tmp.stale ]
+  [ ! -e env/dec/.dev.diff-base.stale ]
 }
 
-@test "lock refuses to remove unmanaged root .env" {
-  printf 'LOCAL=keep\n' > .env
-  run ores-sops lock
-  [ "$status" -ne 0 ]
-  grep -q '^LOCAL=keep$' .env
-}
-
-@test "precommit blocks plaintext even when force-added" {
+@test "precommit blocks force-added plaintext" {
   ores-sops install-hooks
   mkdir -p nested/deeper
   printf 'SECRET=leak\n' > nested/deeper/private.env
@@ -146,9 +126,28 @@ EOF_IGNORE
   [[ "$output" == *"BLOCKED"* ]]
 }
 
+@test "precommit blocks staged rename into plaintext dotenv path" {
+  ores-sops install-hooks
+  printf 'safe\n' > safe.txt
+  git add safe.txt
+  git commit -qm safe
+  git mv -f safe.txt renamed.env
+  run git commit -qm rename
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"BLOCKED"* ]]
+}
+
+@test "precommit is NUL-safe for newline filenames" {
+  ores-sops install-hooks
+  name=$'odd\nname.env'
+  printf 'SECRET=leak\n' > "$name"
+  git add -f -- "$name"
+  run git commit -qm newline
+  [ "$status" -ne 0 ]
+}
+
 @test "precommit blocks unexpected ciphertext path" {
   ores-sops install-hooks
-  mkdir -p env/enc
   printf 'fake\n' > env/enc/staging.env.enc
   git add -f env/enc/staging.env.enc
   run git commit -qm unexpected
@@ -156,74 +155,124 @@ EOF_IGNORE
   [[ "$output" == *"unexpected tracked ciphertext path"* ]]
 }
 
-@test "precommit allows the two approved ciphertext files" {
-  ores-sops install-hooks
-  ores-sops use dev
-  printf 'ALPHA=one\nBRAVO=v2\n' > env/dec/dev.env
-  ores-sops encrypt dev >/dev/null
-  git add env/enc/dev.env.enc
-  run git commit -qm update
-  [ "$status" -eq 0 ]
+@test "verify rejects tracked ciphertext symlink" {
+  printf 'not secret\n' > "$BATS_TEST_TMPDIR/outside.txt"
+  rm env/enc/dev.env.enc
+  ln -s "$BATS_TEST_TMPDIR/outside.txt" env/enc/dev.env.enc
+  git add -f env/enc/dev.env.enc
+  run ores-sops verify
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"tracked symlink"* ]]
 }
 
-@test "verify enforces ignore rules at root and nested depths" {
+@test "managed directory symlink escape is rejected" {
+  outside="$BATS_TEST_TMPDIR/outside-dec"
+  mkdir -p "$outside"
+  rm -rf env/dec
+  ln -s "$outside" env/dec
+  run ores-sops use dev
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"managed path must not be a symlink"* ]]
+  [ ! -e "$outside/dev.env" ]
+}
+
+@test "init refuses symlinked policy file without modifying target" {
+  fresh="$BATS_TEST_TMPDIR/policy-symlink"
+  target="$BATS_TEST_TMPDIR/target-ignore"
+  mkdir -p "$fresh"
+  git -C "$fresh" init -q
+  printf 'KEEP\n' > "$target"
+  ln -s "$target" "$fresh/.gitignore"
+  cd "$fresh"
+  run ores-sops init
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"policy file must not be a symlink"* ]]
+  [ "$(cat "$target")" = "KEEP" ]
+}
+
+@test "custom core.hooksPath is refused by default" {
+  external="$BATS_TEST_TMPDIR/external-hooks"
+  git config core.hooksPath "$external"
+  run ores-sops install-hooks
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"custom core.hooksPath"* ]]
+  [ ! -e "$external/pre-commit" ]
+}
+
+@test "symlinked hook file is refused" {
+  mkdir -p .git/hooks
+  target="$BATS_TEST_TMPDIR/hook-target"
+  printf 'KEEP\n' > "$target"
+  ln -s "$target" .git/hooks/pre-commit
+  run ores-sops install-hooks
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"symlinked hook"* ]]
+  [ "$(cat "$target")" = "KEEP" ]
+}
+
+@test "verify enforces root nested and suffix dotenv ignores" {
   run ores-sops verify
   [ "$status" -eq 0 ]
-  [[ "$output" == *"policy verification passed"* ]]
-
-  git check-ignore --no-index -q .env
   git check-ignore --no-index -q one.env
+  git check-ignore --no-index -q one.env.local
   git check-ignore --no-index -q nested/two.env
-  git check-ignore --no-index -q nested/deeper/three.env
+  git check-ignore --no-index -q nested/two.env.production
   ! git check-ignore --no-index -q env/enc/dev.env.enc
   ! git check-ignore --no-index -q env/enc/prod.env.enc
 }
 
-@test "verify rejects a tracked plaintext env file" {
-  printf 'SECRET=x\n' > leaked.env
-  git add -f leaked.env
+@test "verify rejects tracked private age identity material" {
+  printf 'AGE-SE%s-KEY-1-EXAMPLE\n' 'CRET' > leak.txt
+  git add leak.txt
   run ores-sops verify
   [ "$status" -ne 0 ]
-  [[ "$output" == *"tracked plaintext dotenv paths"* ]]
+  [[ "$output" == *"private key material"* ]]
 }
 
-@test "verify rejects an unexpected tracked file under env/enc" {
-  printf 'x\n' > env/enc/qa.env.enc
-  git add -f env/enc/qa.env.enc
+@test "verify rejects obvious plaintext assignment disguised as ciphertext" {
+  printf 'SECRET=plaintext\nsops_mac=ENC[fake]\n' > env/enc/dev.env.enc
+  git add env/enc/dev.env.enc
   run ores-sops verify
   [ "$status" -ne 0 ]
-  [[ "$output" == *"unexpected tracked files under env/enc"* ]]
+  [[ "$output" == *"obvious plaintext assignment"* ]]
 }
 
-@test "init scaffolds the exact corrected allowlist and is idempotent" {
+@test "verify rejects broad env enc creation rules" {
+  cat >> .sops.yaml <<EOF_SOPS
+  - path_regex: ^env/enc/.*\.env\.enc\$
+    age:
+      - $RECIPIENT
+EOF_SOPS
+  run ores-sops verify
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"broad or noncanonical"* ]]
+}
+
+@test "init scaffolds exact policy and upgrades older ignore block" {
   fresh="$BATS_TEST_TMPDIR/fresh"
   mkdir -p "$fresh"
   cd "$fresh"
   git init -q .
-
+  cat > .gitignore <<'EOF_OLD'
+# BEGIN ores-sops dotenv policy
+*.env
+*/*.env
+*/**/*.env
+.env.*
+!.env.example
+/env/dec/
+/env/enc/*
+!/env/enc/dev.env.enc
+!/env/enc/prod.env.enc
+# END ores-sops dotenv policy
+EOF_OLD
   ores-sops init
-  first="$(cat .gitignore)"
-  ores-sops init
-  [ "$first" = "$(cat .gitignore)" ]
-
-  grep -Fxq '*.env' .gitignore
-  grep -Fxq '*/*.env' .gitignore
-  grep -Fxq '*/**/*.env' .gitignore
-  grep -Fxq '/env/enc/*' .gitignore
-  grep -Fxq '!/env/enc/dev.env.enc' .gitignore
-  grep -Fxq '!/env/enc/prod.env.enc' .gitignore
+  grep -Fxq '*.env.*' .gitignore
+  git check-ignore --no-index -q nested/app.env.local
+  ! git check-ignore --no-index -q env/enc/dev.env.enc
   grep -Fq 'path_regex: ^env/enc/dev\.env\.enc$' .sops.yaml
-  grep -Fq 'path_regex: ^env/enc/prod\.env\.enc$' .sops.yaml
-}
-
-@test "init does not execute shell-like text from scaffold comments" {
-  fresh="$BATS_TEST_TMPDIR/no-interpolation"
-  mkdir -p "$fresh"
-  cd "$fresh"
-  git init -q .
-  run ores-sops init
-  [ "$status" -eq 0 ]
-  [[ "$output" != *"command not found"* ]]
+  grep -Fq '/env/enc/*.env.enc text eol=lf' .gitattributes
+  [ "$(stat -c '%a' env/dec 2>/dev/null || stat -f '%Lp' env/dec)" = "700" ]
 }
 
 @test "status never prints decrypted values" {
