@@ -23,6 +23,9 @@
             gnused
             diffutils
           ];
+          # cmd_diff intentionally expands its cleanup command at trap setup so
+          # the temporary path survives function-local scope under `set -u`.
+          excludeShellChecks = [ "SC2064" ];
           text = builtins.readFile ./ores-sops;
         };
       };
