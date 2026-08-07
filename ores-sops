@@ -145,9 +145,16 @@ cmd_encrypt() {
     sops encrypt "${DOTENV[@]}" --filename-override "$dst" "$src" >"$dst.tmp"
     mv "$dst.tmp" "$dst"
   ) || die "could not encrypt '$1' (no matching creation rule in .sops.yaml?)"
-  # Plaintext and ciphertext now agree; rebaseline or these edits would keep
-  # reading as unencrypted and block the next refresh.
-  record_stamp "$1"
+
+  # Rewrite the plaintext from the ciphertext we just produced, then rebaseline.
+  #
+  # Not redundant: sops' dotenv writer normalizes as it round-trips (blank lines
+  # are dropped, for one). Keeping the hand-edited bytes would leave
+  # plaintext != decrypt(ciphertext) even though they carry identical values, so
+  # the very next `status` would report STALE and `refresh` would rewrite the
+  # file. Normalizing here makes "plaintext == decrypt(ciphertext)" true after
+  # every operation this tool performs.
+  write_plaintext "$1"
   printf 'ores-sops: encrypted -> env/enc/%s.env.enc\n' "$1"
 }
 
