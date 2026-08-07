@@ -82,11 +82,22 @@ An overlay (`overlays.default`) and `lib.forSystem <system>` are also exported.
 
 ## Git hooks
 
-`ores-sops install-hooks` installs `post-merge`, `post-checkout` and
-`post-rewrite`. Git has no `post-pull` hook — those three cover pull, branch
-switch, and rebase respectively.
+`ores-sops install-hooks` installs four hooks.
 
-The hooks never fail the git operation. A hook that aborts your merge because a
+`post-merge`, `post-checkout` and `post-rewrite` call `refresh`. Git has no
+`post-pull` hook — those three cover pull, branch switch, and rebase.
+
+`pre-commit` is the one hook allowed to fail, with two severities:
+
+- **BLOCK** — a plaintext env file is staged. There is no good reason for this
+  and the cost of getting it wrong is a credential in git history forever, so
+  the commit stops. (`git add -f` cannot sneak one past it.)
+- **WARN** — `env/dec/<name>.env` differs from the `env/enc/<name>.env.enc` you
+  are committing. Your input and your output disagree, which usually means you
+  edited the plaintext and forgot `ores-sops encrypt`. It only warns: the commit
+  may have nothing to do with secrets, and blocking it would be wrong.
+
+The other three never fail the git operation. A hook that aborts your merge because a
 secret could not be decrypted is worse than stale plaintext. They also leave any
 pre-existing hook they did not write alone, and `.git/hooks` is not shared by
 git, so each clone installs them once (the devShell hook does this).
