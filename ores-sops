@@ -123,12 +123,31 @@ cmd_use() {
 }
 
 cmd_encrypt() {
+  local allow_empty=0
+  if [ "${1:-}" = "--allow-empty" ]; then allow_empty=1; shift; fi
   need_name "${1:-}"
   local root src dst
   root="$(repo_root)"
   src="env/dec/$1.env"
   dst="env/enc/$1.env.enc"
   [ -f "$root/$src" ] || die "missing $root/$src"
+
+  # Refuse to encrypt nothing over something.
+  #
+  # An empty or comment-only plaintext next to a non-empty ciphertext is far
+  # more likely to be a truncated file, a failed redirect, or an interrupted
+  # edit than a deliberate wipe — and the result would be a commit that quietly
+  # destroys every secret in that environment. Cheap to override when intended.
+  if [ "$allow_empty" = 0 ] &&
+    { [ ! -s "$root/$src" ] || ! grep -qE '^[A-Za-z_][A-Za-z0-9_]*=' "$root/$src"; }; then
+    if [ -s "$root/$dst" ]; then
+      die "env/dec/$1.env has no variables but env/enc/$1.env.enc is not empty.
+  Refusing to encrypt an empty file over existing secrets.
+  restore it:  ores-sops use --force $1
+  really wipe: ores-sops encrypt --allow-empty $1"
+    fi
+  fi
+
   mkdir -p "$root/env/enc"
 
   # Run from the repo root with repo-relative paths.
@@ -425,6 +444,7 @@ ores-sops — repo-convention glue around sops
 
   use <name> [-f]   decrypt env/enc/<name>.env.enc and link ./.env to it
   encrypt <name>    fold env/dec/<name>.env edits back into the ciphertext
+                    (--allow-empty to deliberately wipe an environment)
   edit <name>       sops edit, in place (plaintext never hits disk)
   diff <name>       what local plaintext edits would change
   status            per-environment state; * marks the active one
