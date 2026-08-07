@@ -129,6 +129,22 @@ cmd_encrypt() {
   src="env/dec/$1.env"
   dst="env/enc/$1.env.enc"
   [ -f "$root/$src" ] || die "missing $root/$src"
+
+  # Refuse to encrypt nothing over something.
+  #
+  # An empty or comment-only plaintext next to a non-empty ciphertext is far
+  # more likely to be a truncated file, a failed redirect, or an interrupted
+  # edit than a deliberate wipe — and the result would be a commit that quietly
+  # destroys every secret in that environment. Cheap to override when intended.
+  if [ ! -s "$root/$src" ] || ! grep -qE '^[A-Za-z_][A-Za-z0-9_]*=' "$root/$src"; then
+    if [ -s "$root/$dst" ]; then
+      die "env/dec/$1.env has no variables but env/enc/$1.env.enc is not empty.
+  Refusing to encrypt an empty file over existing secrets.
+  restore it:  ores-sops use --force $1
+  really wipe: ores-sops encrypt --allow-empty $1"
+    fi
+  fi
+
   mkdir -p "$root/env/enc"
 
   # Run from the repo root with repo-relative paths.
