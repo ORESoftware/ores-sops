@@ -222,6 +222,34 @@ EOF
   [ -z "$output" ]
 }
 
+@test "encrypt refuses to write an empty plaintext over existing secrets" {
+  ores-sops use app
+  : > env/dec/app.env
+  run ores-sops encrypt app
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"Refusing to encrypt an empty file"* ]]
+  # The ciphertext is untouched and still holds the secret.
+  ores-sops use --force app
+  grep -q 'BRAVO=original' env/dec/app.env
+}
+
+@test "encrypt refuses a comment-only plaintext over existing secrets" {
+  ores-sops use app
+  printf '# everything got deleted\n' > env/dec/app.env
+  run ores-sops encrypt app
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"Refusing to encrypt an empty file"* ]]
+}
+
+@test "encrypt --allow-empty deliberately wipes an environment" {
+  ores-sops use app
+  : > env/dec/app.env
+  ores-sops encrypt --allow-empty app
+  run ores-sops status
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"BRAVO"* ]]
+}
+
 @test "pre-commit BLOCKS a staged plaintext env file" {
   ores-sops install-hooks --quiet
   ores-sops use app
