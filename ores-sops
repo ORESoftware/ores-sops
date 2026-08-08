@@ -754,7 +754,8 @@ usage() {
   cat <<'EOF_USAGE'
 ores-sops — ORESoftware SOPS dotenv convention
 
-  init                    scaffold exact dev/prod policy and ignore rules
+  init [--recipient K]…   scaffold exact dev/prod policy and ignore rules
+                          (repeatable; also ORES_SOPS_EXTRA_RECIPIENTS)
   use dev|prod [-f]       atomically decrypt and point .env at it
   encrypt dev|prod        encrypt managed plaintext back to .env.enc
   edit dev|prod           edit ciphertext through SOPS
