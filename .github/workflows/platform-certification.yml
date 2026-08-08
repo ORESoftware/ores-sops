@@ -1,0 +1,94 @@
+name: SOPS platform and lifecycle certification
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sops-platform-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  posix-full:
+    name: full-${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
+        with:
+          flakehub: false
+
+      - name: Record non-secret platform facts
+        shell: bash
+        run: |
+          set -euo pipefail
+          uname -a
+          nix eval --raw --impure --expr builtins.currentSystem
+          printf '\n'
+
+      - name: Full SOPS age Bats and ShellCheck suite
+        run: nix flake check -L
+
+  windows-symlink:
+    name: windows-relative-symlink
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Certify native relative symlink and cleanup
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $work = Join-Path $env:RUNNER_TEMP 'ores-sops-windows-symlink'
+          Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Path (Join-Path $work 'env\dec') -Force | Out-Null
+          Set-Content -Path (Join-Path $work 'env\dec\dev.env') -Value 'PILOT_VALUE=dummy-windows-only' -NoNewline
+          Push-Location $work
+          try {
+            New-Item -ItemType SymbolicLink -Path '.env' -Target 'env\dec\dev.env' | Out-Null
+            $item = Get-Item -Force '.env'
+            if (-not ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+              throw '.env was not created as a native Windows reparse-point symlink'
+            }
+            $target = @($item.Target)[0]
+            if (($target -replace '/', '\') -ne 'env\dec\dev.env') {
+              throw "expected relative target env\dec\dev.env, got $target"
+            }
+            $read = cmd /d /c type .env
+            if (($read -join "`n") -ne 'PILOT_VALUE=dummy-windows-only') {
+              throw 'cmd.exe did not resolve the relative .env symlink to the expected dummy target'
+            }
+            Remove-Item -Force '.env'
+            if (-not (Test-Path 'env\dec\dev.env')) {
+              throw 'removing the symlink unexpectedly removed the target'
+            }
+          }
+          finally {
+            Pop-Location
+            Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue
+          }
+
+      - name: Verify Git Bash is available for the bash helper
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $bash = Get-Command bash.exe -ErrorAction Stop
+          & $bash.Source --version | Select-Object -First 1
