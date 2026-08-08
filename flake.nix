@@ -25,6 +25,20 @@
           ];
           text = builtins.readFile ./ores-sops;
         };
+
+        ores-sops-fleet-audit = final.writeShellApplication {
+          name = "ores-sops-fleet-audit";
+          # Intentionally keyless: this scanner reads only tracked path metadata,
+          # ignore/attribute policy, and SOPS path_regex declarations. It never
+          # decrypts or parses application/ciphertext values.
+          runtimeInputs = with final; [
+            git
+            coreutils
+            gnugrep
+            gawk
+          ];
+          text = builtins.readFile ./scripts/fleet-audit.sh;
+        };
       };
     in
     {
@@ -63,12 +77,17 @@
       let pkgs = import nixpkgs { inherit system; overlays = [ overlay ]; };
       in {
         packages.ores-sops = pkgs.ores-sops;
+        packages.ores-sops-fleet-audit = pkgs.ores-sops-fleet-audit;
         packages.default = pkgs.ores-sops;
 
         apps.default = { type = "app"; program = "${pkgs.ores-sops}/bin/ores-sops"; };
+        apps.fleet-audit = {
+          type = "app";
+          program = "${pkgs.ores-sops-fleet-audit}/bin/ores-sops-fleet-audit";
+        };
 
         devShells.default = pkgs.mkShell {
-          packages = with pkgs; [ ores-sops sops age git just shellcheck bats ];
+          packages = with pkgs; [ ores-sops ores-sops-fleet-audit sops age git just shellcheck bats ];
         };
 
         # The container entrypoint is shipped as an example people copy, so it
@@ -81,7 +100,15 @@
 
         checks.tests = pkgs.runCommand "ores-sops-tests"
           {
-            nativeBuildInputs = with pkgs; [ ores-sops sops age git bats coreutils ];
+            nativeBuildInputs = with pkgs; [
+              ores-sops
+              ores-sops-fleet-audit
+              sops
+              age
+              git
+              bats
+              coreutils
+            ];
           } ''
           export HOME="$TMPDIR/home"
           mkdir -p "$HOME"
