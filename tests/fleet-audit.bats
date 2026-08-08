@@ -9,7 +9,7 @@ init_repo() {
   git -C "$path" config commit.gpgsign false
 }
 
-write_adopted_policy() {
+write_policy_files() {
   local path="$1"
   cat >"$path/.gitignore" <<'EOF_IGNORE'
 # BEGIN ores-sops dotenv policy
@@ -35,6 +35,11 @@ creation_rules:
     age:
       - age1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq
 EOF_SOPS
+}
+
+write_adopted_policy() {
+  local path="$1"
+  write_policy_files "$path"
   git -C "$path" add .gitignore .gitattributes .sops.yaml
   git -C "$path" commit -qm policy
 }
@@ -84,6 +89,7 @@ EOF_BROAD
   git -C "$repo" add .sops.yaml
   git -C "$repo" add -f leak.env env/enc/staging.env.enc
   git -C "$repo" commit -qm conflict
+  chmod 000 "$repo/leak.env" "$repo/env/enc/staging.env.enc"
 
   run ores-sops-fleet-audit "$repo"
   [ "$status" -eq 0 ]
@@ -106,4 +112,20 @@ EOF_BROAD
   run ores-sops-fleet-audit "$repo"
   [ "$status" -eq 0 ]
   [[ "$output" == *$'partial\tpartial\t0\t0\t0\tmissing\tmissing\tmissing'* ]]
+}
+
+@test "does not classify untracked local policy files as adopted" {
+  repo="$ROOT/untracked"
+  init_repo "$repo"
+  printf '# baseline\n' >"$repo/README.md"
+  git -C "$repo" add README.md
+  git -C "$repo" commit -qm baseline
+  write_policy_files "$repo"
+
+  run ores-sops-fleet-audit "$repo"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *$'untracked\tpartial\t0\t0\t0\tuntracked\tuntracked\tuntracked'* ]]
+
+  run ores-sops-fleet-audit --strict "$repo"
+  [ "$status" -eq 1 ]
 }
