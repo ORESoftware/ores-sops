@@ -678,7 +678,9 @@ cmd_init() {
   # Validate and de-duplicate before writing: a typo'd recipient silently
   # produces a policy nobody can decrypt with, and sops will not catch it here.
   block="      - $recipient"
-  for r in $(printf '%s' "$extra" | tr ', ' '\n\n'); do
+  # Commas become spaces; the unquoted expansion then splits on whitespace,
+  # so both `--recipient a --recipient b` and `A=a,b` arrive as separate words.
+  for r in $(printf '%s' "$extra" | tr ',' ' '); do
     [ -n "$r" ] || continue
     printf '%s' "$r" | grep -qE '^age1[a-z0-9]{58}$' \
       || fail "not an age public key: $r"
