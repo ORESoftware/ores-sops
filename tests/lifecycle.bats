@@ -114,10 +114,12 @@ EOF_IGNORE
 
   before="$(sha256sum env/enc/dev.env.enc | awk '{print $1}')"
   SOPS_AGE_KEY_FILE="$DEV_NEW_KEY" \
-    sops --rotate --in-place --input-type dotenv env/enc/dev.env.enc >/dev/null 2>&1
+    sops --rotate --in-place --input-type dotenv --output-type dotenv \
+      env/enc/dev.env.enc >/dev/null 2>&1
   after="$(sha256sum env/enc/dev.env.enc | awk '{print $1}')"
 
   [ "$before" != "$after" ]
+  grep -q '^sops_mac=ENC\[' env/enc/dev.env.enc
   ! sops_decrypt "$DEV_OLD_KEY" env/enc/dev.env.enc
   sops_decrypt "$DEV_NEW_KEY" env/enc/dev.env.enc
   sops_decrypt "$RECOVERY_KEY" env/enc/dev.env.enc
