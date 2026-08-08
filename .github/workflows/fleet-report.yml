@@ -1,0 +1,83 @@
+name: SOPS initial keyless fleet report
+
+on:
+  pull_request:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sops-fleet-report-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout scanner
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Clone initial public candidate batch
+        shell: bash
+        env:
+          GIT_TERMINAL_PROMPT: "0"
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/ores-sops-fleet"
+          mkdir -p "$root"
+          for repo in \
+            devops-slack \
+            slack-ores-integrations \
+            happy-wakey.rs \
+            ai-agent-coordinator.rs \
+            flags-2-env
+          do
+            git clone --quiet --depth 1 \
+              "https://github.com/ORESoftware/${repo}.git" \
+              "$root/$repo"
+          done
+
+      - name: Run keyless path and policy audit
+        id: audit
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/ores-sops-fleet"
+          report="$RUNNER_TEMP/sops-fleet-report.tsv"
+          bash ./scripts/fleet-audit.sh \
+            "$root/devops-slack" \
+            "$root/slack-ores-integrations" \
+            "$root/happy-wakey.rs" \
+            "$root/ai-agent-coordinator.rs" \
+            "$root/flags-2-env" \
+            > "$report"
+
+          cat "$report"
+
+          {
+            echo '## ORESoftware SOPS keyless fleet report'
+            echo
+            echo 'This report contains tracked path counts and policy states only. It does not decrypt or read dotenv/ciphertext values.'
+            echo
+            echo '```text'
+            cat "$report"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if grep -q $'\tconflicting\t' "$report"; then
+            echo 'conflicts=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'conflicts=false' >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Explain conflict handling
+        if: steps.audit.outputs.conflicts == 'true'
+        shell: bash
+        run: |
+          echo 'At least one repository is conflicting. Route it to review; do not auto-rewrite it.'
