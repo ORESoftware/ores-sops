@@ -22,6 +22,8 @@ It does **not**:
 - require an age/KMS/private identity;
 - print matched secret content.
 
+The canonical policy files must themselves be **tracked**. Untracked local `.sops.yaml`, `.gitignore`, or `.gitattributes` files classify as partial adoption so a dirty working tree cannot make a repository appear compliant when a fresh clone is not.
+
 ## Usage
 
 Audit one or more local clones:
@@ -46,9 +48,9 @@ repository  status  tracked_plaintext  unexpected_env_enc  tracked_symlinks  sop
 
 ## Statuses
 
-- `adopted`: exact dev/prod SOPS rules, canonical ignore behavior, and ciphertext line-ending attributes are present with no tracked path conflict.
+- `adopted`: tracked exact dev/prod SOPS rules, tracked canonical ignore behavior, and tracked ciphertext line-ending attributes are present with no tracked path conflict.
 - `not-adopted`: no SOPS dotenv adoption signal was found.
-- `partial`: some adoption signal exists, but the contract is incomplete.
+- `partial`: some adoption signal exists, but the tracked contract is incomplete; this includes canonical-looking policy files that exist only in the local working tree.
 - `conflicting`: tracked plaintext dotenv, an unexpected `env/enc/*` path, a tracked symlink policy/ciphertext path, or a broad/noncanonical `env/enc` SOPS rule was found.
 
 The report uses counts and policy-state labels rather than file contents. Repository labels are local checkout basenames so credentials embedded in unusual remote URLs cannot be echoed accidentally.
