@@ -1,0 +1,90 @@
+name: SOPS dotenv policy smoke
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sops-policy-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  keyless-policy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Shell syntax
+        run: bash -n ./ores-sops
+
+      - name: Clean-repository policy smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          work="$(mktemp -d)"
+          home="$(mktemp -d)"
+          trap 'rm -rf "$work" "$home"' EXIT
+
+          git -C "$work" init -q
+          mkdir -p "$home/.config/sops/age"
+          printf '# public key: age1%s\n' "$(printf 'q%.0s' {1..58})" > "$home/.config/sops/age/keys.txt"
+
+          (
+            cd "$work"
+            HOME="$home" "$GITHUB_WORKSPACE/ores-sops" init
+
+            git check-ignore --no-index -q .env
+            git check-ignore --no-index -q root.env
+            git check-ignore --no-index -q root.env.local
+            git check-ignore --no-index -q nested/child.env
+            git check-ignore --no-index -q nested/child.env.production
+            git check-ignore --no-index -q env/dec/dev.env
+            git check-ignore --no-index -q env/dec/prod.env
+
+            ! git check-ignore --no-index -q env/enc/dev.env.enc
+            ! git check-ignore --no-index -q env/enc/prod.env.enc
+
+            grep -Fxq '*.env' .gitignore
+            grep -Fxq '*/*.env' .gitignore
+            grep -Fxq '*/**/*.env' .gitignore
+            grep -Fxq '*.env.*' .gitignore
+            grep -Fxq '/env/enc/*' .gitignore
+            grep -Fxq '!/env/enc/dev.env.enc' .gitignore
+            grep -Fxq '!/env/enc/prod.env.enc' .gitignore
+
+            grep -Fq 'path_regex: ^env/enc/dev\.env\.enc$' .sops.yaml
+            grep -Fq 'path_regex: ^env/enc/prod\.env\.enc$' .sops.yaml
+            grep -Fq '/env/enc/*.env.enc text eol=lf' .gitattributes
+            test "$(stat -c '%a' env/dec)" = 700
+
+            if "$GITHUB_WORKSPACE/ores-sops" use app >/tmp/ores-sops-app.out 2>&1; then
+              echo 'expected unsupported environment to fail' >&2
+              exit 1
+            fi
+            grep -q "unsupported environment 'app'" /tmp/ores-sops-app.out
+          )
+
+  full-nix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
+        with:
+          flakehub: false
+
+      - name: Full flake checks
+        run: nix flake check -L
