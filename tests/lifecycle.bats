@@ -94,23 +94,29 @@ EOF_IGNORE
   sops_decrypt "$PROD_KEY" env/enc/prod.env.enc
 }
 
-@test "offboarding removes the old dev identity after updatekeys plus data-key rotation" {
+@test "offboarding removes the old dev identity before and after data-key rotation" {
   write_rules "      - $DEV_OLD_RECIPIENT
       - $DEV_NEW_RECIPIENT
       - $RECOVERY_RECIPIENT"
   SOPS_AGE_KEY_FILE="$DEV_OLD_KEY" \
     sops updatekeys -y --input-type dotenv env/enc/dev.env.enc >/dev/null 2>&1
 
-  before="$(sha256sum env/enc/dev.env.enc | awk '{print $1}')"
-
   write_rules "      - $DEV_NEW_RECIPIENT
       - $RECOVERY_RECIPIENT"
   SOPS_AGE_KEY_FILE="$DEV_OLD_KEY" \
     sops updatekeys -y --input-type dotenv env/enc/dev.env.enc >/dev/null 2>&1
-  SOPS_AGE_KEY_FILE="$DEV_NEW_KEY" \
-    sops rotate --in-place --input-type dotenv env/enc/dev.env.enc >/dev/null 2>&1
 
+  # updatekeys is the access-removal boundary: prove the old identity is gone
+  # and both retained identities work before rotating the per-file data key.
+  ! sops_decrypt "$DEV_OLD_KEY" env/enc/dev.env.enc
+  sops_decrypt "$DEV_NEW_KEY" env/enc/dev.env.enc
+  sops_decrypt "$RECOVERY_KEY" env/enc/dev.env.enc
+
+  before="$(sha256sum env/enc/dev.env.enc | awk '{print $1}')"
+  SOPS_AGE_KEY_FILE="$DEV_NEW_KEY" \
+    sops --rotate --in-place --input-type dotenv env/enc/dev.env.enc >/dev/null 2>&1
   after="$(sha256sum env/enc/dev.env.enc | awk '{print $1}')"
+
   [ "$before" != "$after" ]
   ! sops_decrypt "$DEV_OLD_KEY" env/enc/dev.env.enc
   sops_decrypt "$DEV_NEW_KEY" env/enc/dev.env.enc
