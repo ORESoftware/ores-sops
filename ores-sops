@@ -644,7 +644,7 @@ EOF_HOOK
 }
 
 cmd_init() {
-  local root key recipient ignore attrs extra block
+  local root key recipient ignore attrs extra block r seen_recipients=""
   root="$(repo_root)"
   assert_policy_path_safe
   prepare_managed_tree
