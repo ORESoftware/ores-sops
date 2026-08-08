@@ -50,7 +50,7 @@ jobs:
           set -euo pipefail
           root="$RUNNER_TEMP/ores-sops-fleet"
           report="$RUNNER_TEMP/sops-fleet-report.tsv"
-          ./scripts/fleet-audit.sh \
+          bash ./scripts/fleet-audit.sh \
             "$root/devops-slack" \
             "$root/slack-ores-integrations" \
             "$root/happy-wakey.rs" \
