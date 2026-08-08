@@ -306,7 +306,11 @@ EOF_OLD
   # property that makes it a real second recovery path rather than decoration.
   printf 'K=v\n' > env/dec/dev.env
   ores-sops encrypt dev
-  SOPS_AGE_KEY_FILE="$recovery_file" sops --decrypt env/enc/dev.env.enc | grep -Fq 'K=v'
+  # sops infers format from the extension and `.env.enc` is not dotenv to it,
+  # so the type must be explicit — the same reason the tool keeps $DOTENV.
+  SOPS_AGE_KEY_FILE="$recovery_file" \
+    sops --input-type dotenv --output-type dotenv --decrypt env/enc/dev.env.enc \
+    | grep -Fq 'K=v'
 }
 
 @test "init takes extra recipients from the environment too" {
