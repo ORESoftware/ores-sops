@@ -15,7 +15,7 @@ Emit one TSV row per local Git repository with only non-secret conformance data.
 When no repository path is supplied, audit the current repository.
 
 Statuses:
-  adopted       exact SOPS rules + ignore contract + ciphertext attributes
+  adopted       exact tracked SOPS rules + ignore contract + ciphertext attributes
   not-adopted   no SOPS dotenv adoption signal detected
   partial       some adoption signal exists but the contract is incomplete
   conflicting   tracked plaintext, unexpected env/enc path, symlink policy path,
@@ -34,6 +34,10 @@ is_plaintext_env_path() {
   esac
 }
 
+is_tracked() {
+  git ls-files --error-unmatch -- "$1" >/dev/null 2>&1
+}
+
 tracked_mode() {
   git ls-files -s -- "$1" | awk 'NR == 1 { print $1 }'
 }
@@ -42,6 +46,10 @@ sops_rule_state() {
   local file="$1"
   if [ ! -e "$file" ]; then
     printf 'missing\n'
+    return
+  fi
+  if ! is_tracked "$file"; then
+    printf 'untracked\n'
     return
   fi
   if [ -L "$file" ] || [ ! -f "$file" ]; then
@@ -67,7 +75,9 @@ sops_rule_state() {
 }
 
 ignore_contract_state() {
-  [ -f .gitignore ] || { printf 'missing\n'; return; }
+  [ -e .gitignore ] || { printf 'missing\n'; return; }
+  is_tracked .gitignore || { printf 'untracked\n'; return; }
+  [ -f .gitignore ] || { printf 'invalid\n'; return; }
   [ ! -L .gitignore ] || { printf 'invalid\n'; return; }
 
   git check-ignore --no-index -q .env || { printf 'missing\n'; return; }
@@ -80,7 +90,9 @@ ignore_contract_state() {
 }
 
 attrs_state() {
-  [ -f .gitattributes ] || { printf 'missing\n'; return; }
+  [ -e .gitattributes ] || { printf 'missing\n'; return; }
+  is_tracked .gitattributes || { printf 'untracked\n'; return; }
+  [ -f .gitattributes ] || { printf 'invalid\n'; return; }
   [ ! -L .gitattributes ] || { printf 'invalid\n'; return; }
   grep -Fqx '/env/enc/*.env.enc text eol=lf' .gitattributes && printf 'ok\n' || printf 'missing\n'
 }
@@ -128,7 +140,7 @@ audit_one() {
 
     [ -e .sops.yaml ] && signals=$((signals + 1))
     [ "$env_enc_count" -gt 0 ] && signals=$((signals + 1))
-    [ "$attrs" != missing ] && signals=$((signals + 1))
+    [ -e .gitattributes ] && signals=$((signals + 1))
     if [ -f .gitignore ] && grep -Fq 'BEGIN ores-sops dotenv policy' .gitignore; then
       signals=$((signals + 1))
     fi
