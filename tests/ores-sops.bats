@@ -282,3 +282,69 @@ EOF_OLD
   [[ "$output" != *"dev-original"* ]]
   [[ "$output" != *"prod-original"* ]]
 }
+
+# A repo scaffolded with one recipient is one lost identity away from
+# unrecoverable loss of every environment, and retrofitting costs a
+# `sops updatekeys` per repo across the fleet.
+@test "init accepts extra recipients and lists each on both rules" {
+  fresh="$BATS_TEST_TMPDIR/multi"
+  mkdir -p "$fresh"
+  cd "$fresh"
+  git init -q .
+
+  recovery_file="$BATS_TEST_TMPDIR/recovery.txt"
+  age-keygen -o "$recovery_file" 2>/dev/null
+  recovery="$(grep -o 'age1[a-z0-9]\{58\}' "$recovery_file" | head -1)"
+
+  ores-sops init --recipient "$recovery"
+
+  # Both the local identity and the recovery identity, on dev and on prod.
+  [ "$(grep -c -- "- $RECIPIENT" .sops.yaml)" = 2 ]
+  [ "$(grep -c -- "- $recovery" .sops.yaml)" = 2 ]
+
+  # And the policy still round-trips with the recovery key alone, which is the
+  # property that makes it a real second recovery path rather than decoration.
+  printf 'K=v\n' > env/dec/dev.env
+  ores-sops encrypt dev
+  # sops infers format from the extension and `.env.enc` is not dotenv to it,
+  # so the type must be explicit — the same reason the tool keeps $DOTENV.
+  SOPS_AGE_KEY_FILE="$recovery_file" \
+    sops --input-type dotenv --output-type dotenv --decrypt env/enc/dev.env.enc \
+    | grep -Fq 'K=v'
+}
+
+@test "init takes extra recipients from the environment too" {
+  fresh="$BATS_TEST_TMPDIR/fromenv"
+  mkdir -p "$fresh"
+  cd "$fresh"
+  git init -q .
+
+  other="$BATS_TEST_TMPDIR/other.txt"
+  age-keygen -o "$other" 2>/dev/null
+  other_recipient="$(grep -o 'age1[a-z0-9]\{58\}' "$other" | head -1)"
+
+  ORES_SOPS_EXTRA_RECIPIENTS="$other_recipient" ores-sops init
+  [ "$(grep -c -- "- $other_recipient" .sops.yaml)" = 2 ]
+}
+
+@test "init rejects a malformed recipient instead of writing a policy nobody can use" {
+  fresh="$BATS_TEST_TMPDIR/bad"
+  mkdir -p "$fresh"
+  cd "$fresh"
+  git init -q .
+
+  run ores-sops init --recipient age1-not-a-real-key
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"not an age public key"* ]]
+  [ ! -f .sops.yaml ]
+}
+
+@test "init does not repeat a recipient that is already the local identity" {
+  fresh="$BATS_TEST_TMPDIR/dupe"
+  mkdir -p "$fresh"
+  cd "$fresh"
+  git init -q .
+
+  ores-sops init --recipient "$RECIPIENT"
+  [ "$(grep -c -- "- $RECIPIENT" .sops.yaml)" = 2 ]
+}

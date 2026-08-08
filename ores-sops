@@ -644,14 +644,51 @@ EOF_HOOK
 }
 
 cmd_init() {
-  local root key recipient ignore attrs
+  local root key recipient ignore attrs extra block r seen_recipients=""
   root="$(repo_root)"
   assert_policy_path_safe
   prepare_managed_tree
+
+  # Additional recipients, so a repo can be born with more than one way back in.
+  # A single recipient means one lost identity is unrecoverable loss of every
+  # environment, and retrofitting one costs a `sops updatekeys` per repo.
+  extra=""
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --recipient)
+        [ "$#" -ge 2 ] || fail "--recipient needs an age public key"
+        extra="$extra $2"
+        shift 2
+        ;;
+      --recipient=*)
+        extra="$extra ${1#--recipient=}"
+        shift
+        ;;
+      *) fail "unknown argument for init: $1" ;;
+    esac
+  done
+  # Same list, for CI that cannot easily pass repeated flags.
+  extra="$extra ${ORES_SOPS_EXTRA_RECIPIENTS:-}"
+
   key="${SOPS_AGE_KEY_FILE:-$HOME/.config/sops/age/keys.txt}"
   [ -f "$key" ] || fail "no age identity at $key — create one with: age-keygen -o $key"
   recipient="$(grep -o 'age1[a-z0-9]\{58\}' "$key" | head -1)"
   [ -n "$recipient" ] || fail "no age recipient found in $key"
+
+  # Validate and de-duplicate before writing: a typo'd recipient silently
+  # produces a policy nobody can decrypt with, and sops will not catch it here.
+  block="      - $recipient"
+  # Commas become spaces; the unquoted expansion then splits on whitespace,
+  # so both `--recipient a --recipient b` and `A=a,b` arrive as separate words.
+  for r in $(printf '%s' "$extra" | tr ',' ' '); do
+    [ -n "$r" ] || continue
+    printf '%s' "$r" | grep -qE '^age1[a-z0-9]{58}$' \
+      || fail "not an age public key: $r"
+    case " $recipient $seen_recipients " in *" $r "*) continue ;; esac
+    seen_recipients="$seen_recipients $r"
+    block="$block
+      - $r"
+  done
 
   if [ ! -f "$root/.sops.yaml" ]; then
     cat >"$root/.sops.yaml" <<EOF_SOPS
@@ -659,13 +696,18 @@ cmd_init() {
 # The same local recipient is used only to make the initial pilot usable.
 # Before production use, replace the prod recipient set with a distinct
 # protected production identity/KMS policy and run sops updatekeys.
+#
+# Every rule below lists each recipient explicitly. Keep at least two so a lost
+# identity is a rekey rather than permanent loss; add more with
+#   ores-sops init --recipient age1... (at scaffold time)
+#   sops updatekeys env/enc/<name>.env.enc (afterwards)
 creation_rules:
   - path_regex: ^env/enc/dev\\.env\\.enc\$
     age:
-      - $recipient
+$block
   - path_regex: ^env/enc/prod\\.env\\.enc\$
     age:
-      - $recipient
+$block
 EOF_SOPS
   fi
 
@@ -714,7 +756,8 @@ usage() {
   cat <<'EOF_USAGE'
 ores-sops — ORESoftware SOPS dotenv convention
 
-  init                    scaffold exact dev/prod policy and ignore rules
+  init [--recipient K]…   scaffold exact dev/prod policy and ignore rules
+                          (repeatable; also ORES_SOPS_EXTRA_RECIPIENTS)
   use dev|prod [-f]       atomically decrypt and point .env at it
   encrypt dev|prod        encrypt managed plaintext back to .env.enc
   edit dev|prod           edit ciphertext through SOPS
