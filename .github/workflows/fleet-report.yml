@@ -1,4 +1,4 @@
-name: SOPS initial keyless fleet report
+name: SOPS keyless fleet report
 
 on:
   pull_request:
@@ -23,7 +23,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Clone initial public candidate batch
+      - name: Clone public candidate batches
         shell: bash
         env:
           GIT_TERMINAL_PROMPT: "0"
@@ -36,7 +36,12 @@ jobs:
             slack-ores-integrations \
             happy-wakey.rs \
             ai-agent-coordinator.rs \
-            flags-2-env
+            flags-2-env \
+            r2g \
+            r2g.example \
+            r2g.docker \
+            ai-agent-bridge.rs \
+            oresoftware.github.io
           do
             git clone --quiet --depth 1 \
               "https://github.com/ORESoftware/${repo}.git" \
@@ -56,6 +61,11 @@ jobs:
             "$root/happy-wakey.rs" \
             "$root/ai-agent-coordinator.rs" \
             "$root/flags-2-env" \
+            "$root/r2g" \
+            "$root/r2g.example" \
+            "$root/r2g.docker" \
+            "$root/ai-agent-bridge.rs" \
+            "$root/oresoftware.github.io" \
             > "$report"
 
           cat "$report"
@@ -64,6 +74,12 @@ jobs:
             echo '## ORESoftware SOPS keyless fleet report'
             echo
             echo 'This report contains tracked path counts and policy states only. It does not decrypt or read dotenv/ciphertext values.'
+            echo
+            echo '### Batch 1'
+            echo '`devops-slack`, `slack-ores-integrations`, `happy-wakey.rs`, `ai-agent-coordinator.rs`, `flags-2-env`'
+            echo
+            echo '### Batch 2'
+            echo '`r2g`, `r2g.example`, `r2g.docker`, `ai-agent-bridge.rs`, `oresoftware.github.io`'
             echo
             echo '```text'
             cat "$report"
