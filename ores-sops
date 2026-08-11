@@ -15,7 +15,7 @@
 
 set -euo pipefail
 
-VERSION="0.3.1"
+VERSION="0.3.2"
 DOTENV=(--input-type dotenv --output-type dotenv)
 
 fail() {
@@ -60,12 +60,27 @@ assert_managed_tree_safe() {
   done
 }
 
+ensure_dec_directory() {
+  local root
+  root="$(repo_root)"
+  # Check before mkdir so a repository-controlled symlink cannot redirect
+  # plaintext outside the repository. Existing non-directory forms fail too.
+  assert_managed_tree_safe
+  mkdir -p "$root/env/dec"
+  chmod 700 "$root/env/dec"
+}
+
 prepare_managed_tree() {
   local root
   root="$(repo_root)"
+  ensure_dec_directory
   assert_managed_tree_safe
-  mkdir -p "$root/env/enc" "$root/env/dec"
-  chmod 700 "$root/env/dec"
+  mkdir -p "$root/env/enc"
+}
+
+cmd_ensure_dec() {
+  ensure_dec_directory
+  printf 'ores-sops: ready env/dec (mode 0700, runtime-only)\n'
 }
 
 assert_managed_file_safe() {
@@ -768,6 +783,7 @@ ores-sops — ORESoftware SOPS dotenv convention
   precommit               block plaintext and unexpected env/enc paths
   lock                    remove managed plaintext, temp state, and managed .env symlink
   install-hooks           install safe refresh/pre-commit hooks
+  ensure-dec              create the ignored runtime env/dec directory, mode 0700
 
 Tracked secret-bearing paths are exactly:
   env/enc/dev.env.enc
@@ -782,6 +798,16 @@ EOF_USAGE
 main() {
   local cmd="${1:-}"
   [ "$#" -gt 0 ] && shift || true
+
+  # env/dec is intentionally absent from Git. Every managed entry point creates
+  # the working directory before status, decryption, audit, hooks, or cleanup.
+  # Help and version remain side-effect free.
+  case "$cmd" in
+    init|use|encrypt|edit|diff|status|refresh|verify|precommit|lock|install-hooks|ensure-dec)
+      ensure_dec_directory
+      ;;
+  esac
+
   case "$cmd" in
     init) cmd_init "$@" ;;
     use) cmd_use "$@" ;;
@@ -794,6 +820,7 @@ main() {
     precommit) cmd_precommit "$@" ;;
     lock) cmd_lock "$@" ;;
     install-hooks) cmd_install_hooks "$@" ;;
+    ensure-dec) cmd_ensure_dec "$@" ;;
     --version|version) printf 'ores-sops %s\n' "$VERSION" ;;
     -h|--help|help|"") usage ;;
     *) fail "unknown command '$cmd' (try: ores-sops help)" ;;
