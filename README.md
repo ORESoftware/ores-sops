@@ -19,6 +19,10 @@ env/dec/prod.env
 .env -> env/dec/dev.env   # or prod
 ```
 
+The `env/dec/` directory itself is runtime-only: it is not represented by a
+tracked `.gitkeep`, README, or placeholder. Every managed command and the Nix
+shell hook create it with `mkdir -p` and enforce mode `0700`.
+
 The root `.env` is a **relative managed symlink**, never a copied plaintext file. `ores-sops` refuses to overwrite or delete an unmanaged `.env` file or an unmanaged `.env` symlink.
 
 Because the tracked files end in `.enc`, SOPS cannot infer the dotenv store from the filename. Every operation therefore uses explicit `--input-type dotenv --output-type dotenv`; encryption also uses `--filename-override env/enc/<dev|prod>.env.enc` so exact `.sops.yaml` creation rules are selected deterministically. Data-key rotation keeps the same explicit input/output typing so the rotated `.env.enc` remains dotenv-serialized.
@@ -85,6 +89,7 @@ ores-sops verify
 ores-sops precommit
 ores-sops lock
 ores-sops install-hooks
+ores-sops ensure-dec
 ```
 
 `diff` is deliberately non-secret: it reports only variable names prefixed with `+` (added), `-` (removed), or `~` (value changed). It hashes values internally for comparison and never prints them.
@@ -93,7 +98,7 @@ Arbitrary environment names are rejected. This is intentional: the tracked VCS c
 
 ## Atomic activation and failure behavior
 
-`use` decrypts into an owner-only temporary file under `env/dec/`, validates successful SOPS completion and dotenv syntax/duplicate keys, applies mode `0600`, and only then atomically renames it into `env/dec/dev.env` or `env/dec/prod.env`. The managed `env/dec` directory is mode `0700` on POSIX platforms.
+Every managed command first creates the ignored `env/dec/` directory if it is absent, rejects symlink/non-directory forms, and applies mode `0700`. `use` then decrypts into an owner-only temporary file under `env/dec/`, validates successful SOPS completion and dotenv syntax/duplicate keys, applies mode `0600`, and only then atomically renames it into `env/dec/dev.env` or `env/dec/prod.env`.
 
 A failed decrypt therefore leaves the previous complete plaintext untouched. After a successful decrypt, the root symlink is replaced atomically with a relative link.
 
@@ -194,6 +199,8 @@ The repository's platform certification runs the full Nix/SOPS/age/Bats/ShellChe
 ```
 
 The default package pins SOPS, age, Git, and shell dependencies. The flake also exposes `packages.ores-sops-fleet-audit` / `apps.fleet-audit`. The development shell includes both commands plus Bats and ShellCheck.
+
+The exported shell hook calls `ores-sops ensure-dec` before hook installation or refresh, so a fresh clone never depends on an impossible tracked empty directory.
 
 ## Tests
 
