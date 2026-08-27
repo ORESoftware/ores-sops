@@ -129,3 +129,49 @@ EOF_BROAD
   run ores-sops-fleet-audit --strict "$repo"
   [ "$status" -eq 1 ]
 }
+
+@test "provider inventory reports environments without exposing ciphertext values" {
+  repo="$ROOT/providers"
+  init_repo "$repo"
+  write_adopted_policy "$repo"
+  mkdir -p "$repo/env/enc"
+  cat >"$repo/env/enc/dev.env.enc" <<'EOF_DEV'
+AUTH_SENDGRID_API_KEY=ENC[AES256_GCM,data:sendgrid-secret-marker,iv:a,tag:b,type:str]
+AUTH_TWILIO_ACCOUNT_SID=ENC[AES256_GCM,data:twilio-secret-marker,iv:c,tag:d,type:str]
+sops_version=3.13.3
+EOF_DEV
+  cat >"$repo/env/enc/prod.env.enc" <<'EOF_PROD'
+SENDGRID_API_KEY=ENC[AES256_GCM,data:prod-secret-marker,iv:e,tag:f,type:str]
+sops_version=3.13.3
+EOF_PROD
+  git -C "$repo" add env/enc/dev.env.enc env/enc/prod.env.enc
+  git -C "$repo" commit -qm providers
+  chmod 000 "$repo/env/enc/dev.env.enc" "$repo/env/enc/prod.env.enc"
+
+  run ores-sops-fleet-audit --provider-inventory "$repo"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *$'providers\tadopted\t0\t0\t0\texact\tok\tok\t0\tdev+prod\tdev'* ]]
+  [[ "$output" != *"sendgrid-secret-marker"* ]]
+  [[ "$output" != *"twilio-secret-marker"* ]]
+  [[ "$output" != *"prod-secret-marker"* ]]
+}
+
+@test "provider inventory calls out tracked env dec files" {
+  repo="$ROOT/tracked-dec"
+  init_repo "$repo"
+  write_adopted_policy "$repo"
+  mkdir -p "$repo/env/dec"
+  printf 'SECRET_VALUE=must-not-print\n' >"$repo/env/dec/dev.env"
+  git -C "$repo" add -f env/dec/dev.env
+  git -C "$repo" commit -qm tracked-dec
+  chmod 000 "$repo/env/dec/dev.env"
+
+  run ores-sops-fleet-audit --provider-inventory "$repo"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *$'tracked-dec\tconflicting\t1\t0\t0\texact\tok\tok\t1\tnone\tnone'* ]]
+  [[ "$output" != *"SECRET_VALUE"* ]]
+  [[ "$output" != *"must-not-print"* ]]
+
+  run ores-sops-fleet-audit --strict --provider-inventory "$repo"
+  [ "$status" -eq 2 ]
+}

@@ -74,6 +74,9 @@
         export SOPS_AGE_KEY_FILE="''${SOPS_AGE_KEY_FILE:-$HOME/.config/sops/age/keys.txt}"
 
         if command -v ores-sops >/dev/null 2>&1 && git rev-parse --git-dir >/dev/null 2>&1; then
+          # env/dec is runtime-only and cannot exist in a fresh clone.
+          # Create it before every other Nix/SOPS integration path.
+          ores-sops ensure-dec
           # .git/hooks is not shared by git, so every clone needs this once.
           ores-sops install-hooks --quiet || true
           ores-sops refresh || true
