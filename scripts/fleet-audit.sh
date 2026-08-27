@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
 # Path/policy-only fleet conformance scanner for the ORESoftware SOPS dotenv contract.
 #
-# This command deliberately never decrypts files and never reads application
-# dotenv/ciphertext values. It reports only repository adoption state and policy
-# metadata that are safe to use for rollout prioritization.
+# The default scan deliberately never decrypts files and never reads application
+# dotenv/ciphertext values. With --provider-inventory it reads only variable
+# names from tracked SOPS dotenv blobs through the Git index; ciphertext values
+# are never emitted. Reports contain only repository adoption state and
+# non-secret policy metadata that are safe for rollout prioritization.
 
 set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: ores-sops-fleet-audit [--strict] [repo-path ...]
+Usage: ores-sops-fleet-audit [--strict] [--provider-inventory] [repo-path ...]
 
 Emit one TSV row per local Git repository with only non-secret conformance data.
 When no repository path is supplied, audit the current repository.
@@ -20,6 +22,10 @@ Statuses:
   partial       some adoption signal exists but the contract is incomplete
   conflicting   tracked plaintext, unexpected env/enc path, symlink policy path,
                 or broad/noncanonical env/enc SOPS rule was detected
+
+--provider-inventory adds tracked_env_dec, sendgrid_envs, and twilio_envs columns.
+Provider states are none, dev, prod, or dev+prod. The scanner parses only the
+variable name before '=' from tracked env/enc blobs and never prints values.
 
 --strict exits non-zero unless every repository is adopted. Without --strict,
 findings are reported but do not stop a fleet scan.
@@ -97,10 +103,41 @@ attrs_state() {
   grep -Fqx '/env/enc/*.env.enc text eol=lf' .gitattributes && printf 'ok\n' || printf 'missing\n'
 }
 
+provider_env_state() {
+  local pattern="$1"
+  local environment file
+  local states=()
+
+  for environment in dev prod; do
+    file="env/enc/${environment}.env.enc"
+    if ! is_tracked "$file" || [ "$(tracked_mode "$file")" = 120000 ]; then
+      continue
+    fi
+
+    if git show ":$file" 2>/dev/null | awk -F= -v pattern="$pattern" '
+      /^[A-Za-z_][A-Za-z0-9_]*=/ {
+        if ($1 ~ pattern) {
+          found = 1
+        }
+      }
+      END { exit(found ? 0 : 1) }
+    '; then
+      states+=("$environment")
+    fi
+  done
+
+  case "${#states[@]}" in
+    0) printf 'none\n' ;;
+    1) printf '%s\n' "${states[0]}" ;;
+    2) printf '%s+%s\n' "${states[0]}" "${states[1]}" ;;
+  esac
+}
+
 audit_one() {
   local requested="$1" root label
   local plaintext=0 unexpected=0 symlinks=0 env_enc_count=0 signals=0
-  local f mode rules ignore attrs status
+  local tracked_env_dec=0
+  local f mode rules ignore attrs status sendgrid_envs twilio_envs
 
   root="$(git -C "$requested" rev-parse --show-toplevel 2>/dev/null)" || {
     printf 'ores-sops-fleet-audit: not a git repository: %q\n' "$requested" >&2
@@ -121,6 +158,11 @@ audit_one() {
         env/enc/*)
           env_enc_count=$((env_enc_count + 1))
           unexpected=$((unexpected + 1))
+          [ "$mode" != 120000 ] || symlinks=$((symlinks + 1))
+          ;;
+        env/dec/*)
+          plaintext=$((plaintext + 1))
+          tracked_env_dec=$((tracked_env_dec + 1))
           [ "$mode" != 120000 ] || symlinks=$((symlinks + 1))
           ;;
         .sops.yaml|.gitignore|.gitattributes|.env.example)
@@ -155,8 +197,16 @@ audit_one() {
       status=partial
     fi
 
-    printf '%s\t%s\t%d\t%d\t%d\t%s\t%s\t%s\n' \
-      "$label" "$status" "$plaintext" "$unexpected" "$symlinks" "$rules" "$ignore" "$attrs"
+    if [ "$provider_inventory" -eq 1 ]; then
+      sendgrid_envs="$(provider_env_state '(^|_)SENDGRID(_|$)')"
+      twilio_envs="$(provider_env_state '(^|_)TWILIO(_|$)')"
+      printf '%s\t%s\t%d\t%d\t%d\t%s\t%s\t%s\t%d\t%s\t%s\n' \
+        "$label" "$status" "$plaintext" "$unexpected" "$symlinks" "$rules" "$ignore" "$attrs" \
+        "$tracked_env_dec" "$sendgrid_envs" "$twilio_envs"
+    else
+      printf '%s\t%s\t%d\t%d\t%d\t%s\t%s\t%s\n' \
+        "$label" "$status" "$plaintext" "$unexpected" "$symlinks" "$rules" "$ignore" "$attrs"
+    fi
 
     case "$status" in
       adopted) exit 0 ;;
@@ -167,10 +217,12 @@ audit_one() {
 }
 
 strict=0
+provider_inventory=0
 repos=()
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --strict) strict=1 ;;
+    --provider-inventory) provider_inventory=1 ;;
     -h|--help) usage; exit 0 ;;
     --) shift; repos+=("$@"); break ;;
     -*) printf 'ores-sops-fleet-audit: unknown option: %s\n' "$1" >&2; usage >&2; exit 64 ;;
@@ -181,7 +233,11 @@ done
 
 [ "${#repos[@]}" -gt 0 ] || repos=(.)
 
-printf 'repository\tstatus\ttracked_plaintext\tunexpected_env_enc\ttracked_symlinks\tsops_rules\tignore_contract\tciphertext_attributes\n'
+if [ "$provider_inventory" -eq 1 ]; then
+  printf 'repository\tstatus\ttracked_plaintext\tunexpected_env_enc\ttracked_symlinks\tsops_rules\tignore_contract\tciphertext_attributes\ttracked_env_dec\tsendgrid_envs\ttwilio_envs\n'
+else
+  printf 'repository\tstatus\ttracked_plaintext\tunexpected_env_enc\ttracked_symlinks\tsops_rules\tignore_contract\tciphertext_attributes\n'
+fi
 
 worst=0
 for repo in "${repos[@]}"; do
