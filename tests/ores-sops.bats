@@ -48,6 +48,40 @@ EOF_IGNORE
   git commit -qm baseline
 }
 
+@test "every managed command recreates ignored env/dec with mode 0700" {
+  commands=(
+    "ensure-dec"
+    "status"
+    "verify"
+    "precommit"
+    "install-hooks --quiet"
+    "lock"
+  )
+
+  for command in "${commands[@]}"; do
+    rm -rf env/dec
+    run bash -c "ores-sops $command"
+    [ "$status" -eq 0 ]
+    [ -d env/dec ]
+    [ ! -L env/dec ]
+    [ "$(stat -c '%a' env/dec 2>/dev/null || stat -f '%Lp' env/dec)" = "700" ]
+    git check-ignore --no-index -q env/dec/runtime.env
+    [ -z "$(git ls-files -- env/dec)" ]
+  done
+}
+
+@test "runtime bootstrap refuses a symlinked env/dec without touching its target" {
+  outside="$BATS_TEST_TMPDIR/outside-runtime-dec"
+  mkdir -p "$outside"
+  rm -rf env/dec
+  ln -s "$outside" env/dec
+
+  run ores-sops status
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"managed path must not be a symlink"* ]]
+  [ -z "$(find "$outside" -mindepth 1 -maxdepth 1 -print -quit)" ]
+}
+
 @test "only dev and prod environment names are accepted" {
   run ores-sops use app
   [ "$status" -ne 0 ]
