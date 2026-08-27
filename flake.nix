@@ -28,9 +28,9 @@
 
         ores-sops-fleet-audit = final.writeShellApplication {
           name = "ores-sops-fleet-audit";
-          # Intentionally keyless: this scanner reads only tracked path metadata,
-          # ignore/attribute policy, and SOPS path_regex declarations. It never
-          # decrypts or parses application/ciphertext values.
+          # Default scan is keyless path/policy metadata. --provider-inventory
+          # additionally reads variable *names* from tracked env/enc blobs and
+          # never emits ciphertext or plaintext values.
           runtimeInputs = with final; [
             git
             coreutils
@@ -44,9 +44,11 @@
     {
       overlays.default = overlay;
 
-      # Shared by Nix shells and available to consumers that compose a larger
-      # shellHook. Empty directories do not survive Git, so every shell entry
-      # recreates the ignored plaintext boundary before SOPS or Just needs it.
+      # Nix-shell fallback when ores-sops is not yet on PATH. Canonical
+      # creation is `ores-sops ensure-dec` (symlink-safe, fail-closed).
+      # Consumers must not mkdir/chmod env/dec themselves; see
+      # docs/consumer-boundary.md. Empty directories do not survive Git, so
+      # every shell entry recreates the ignored plaintext boundary.
       # Refuse repo-controlled symlink redirection instead of following it.
       lib.prepareEnvDec = ''
         _ores_sops_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"

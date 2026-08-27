@@ -200,7 +200,7 @@ The repository's platform certification runs the full Nix/SOPS/age/Bats/ShellChe
 
 The default package pins SOPS, age, Git, and shell dependencies. The flake also exposes `packages.ores-sops-fleet-audit` / `apps.fleet-audit`. The development shell includes both commands plus Bats and ShellCheck.
 
-The exported shell hook calls `ores-sops ensure-dec` before hook installation or refresh, so a fresh clone never depends on an impossible tracked empty directory.
+The exported shell hook runs `ores-sops.lib.prepareEnvDec` as a Nix fallback, then `ores-sops ensure-dec` before hook installation or refresh, so a fresh clone never depends on an impossible tracked empty directory. Consumer Justfiles must call `ores-sops ensure-dec` rather than `mkdir`/`chmod` on `env/dec`; see [`docs/consumer-boundary.md`](docs/consumer-boundary.md).
 
 ## Tests
 
