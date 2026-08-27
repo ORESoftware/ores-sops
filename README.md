@@ -2,6 +2,15 @@
 
 `ores-sops` is the canonical ORESoftware repository convention around [SOPS](https://github.com/getsops/sops) for dotenv secrets.
 
+It is **not** replaced by [ores-otel](https://github.com/ores-otel). They are different layers:
+
+| Layer | Repository | Job |
+| --- | --- | --- |
+| Secrets at rest in Git | `ORESoftware/ores-sops` | Exact `dev`/`prod` SOPS dotenv contract (`env/enc`, `env/dec`) |
+| Logs, traces, metrics | `ores-otel/*` | OpenTelemetry, application logging, and observability |
+
+ores-otel repositories *consume* this contract for encrypted env files (for example [`ores-otel/ores.otel.log/env`](https://github.com/ores-otel/ores.otel.log/blob/main/env/README.md)). Auth stays in [shared-auth](https://github.com/shared-auth); package management stays in [zed-pkg](https://github.com/zed-pkg). See [`docs/scope.md`](docs/scope.md).
+
 ## Contract
 
 Exactly two secret-bearing ciphertext files are allowed in version control:
@@ -21,7 +30,8 @@ env/dec/prod.env
 
 The `env/dec/` directory itself is runtime-only: it is not represented by a
 tracked `.gitkeep`, README, or placeholder. Every managed command and the Nix
-shell hook create it with `mkdir -p` and enforce mode `0700`.
+shell hook create it through `ores-sops ensure-dec` (symlink-safe, mode `0700`).
+Callers must not `mkdir`/`chmod` `env/dec` before delegating to the helper.
 
 The root `.env` is a **relative managed symlink**, never a copied plaintext file. `ores-sops` refuses to overwrite or delete an unmanaged `.env` file or an unmanaged `.env` symlink.
 
@@ -163,7 +173,7 @@ The TSV report contains only repository basename, adoption status, tracked viola
 
 Statuses are `adopted`, `not-adopted`, `partial`, and `conflicting`. Canonical policy files must be tracked; untracked local policy cannot make a dirty working tree look compliant. `--strict` exits non-zero unless every scanned repository is adopted.
 
-See [`docs/fleet-audit.md`](docs/fleet-audit.md) for the data boundary and rollout workflow.
+See [`docs/fleet-audit.md`](docs/fleet-audit.md) for the data boundary and rollout workflow. Opt-in `--provider-inventory` adds SendGrid/Twilio *name* presence per environment without printing values.
 
 ## Git hooks
 
@@ -210,3 +220,13 @@ nix flake check -L
 ```
 
 The regression suite covers the exact allowlist, nested/suffixed plaintext rejection, dev/prod name restriction, SOPS ciphertext shape, relative symlinking, atomic failure preservation, local-edit protection, unmanaged `.env` refusal, cleanup safety, non-secret diff behavior, generated dev/prod/recovery lifecycle, offboarding/data-key rotation, policy verification, platform certification, and keyless fleet-audit classifications including unreadable secret-looking fixtures that the audit must not echo.
+
+## Docs
+
+- [`docs/scope.md`](docs/scope.md) — why this is not ores-otel
+- [`docs/consumer-boundary.md`](docs/consumer-boundary.md) — caller order, Docker exclusions, CI contract
+- [`docs/runtime-directory.md`](docs/runtime-directory.md) — `env/dec` creation via `ensure-dec`
+- [`docs/fleet-audit.md`](docs/fleet-audit.md) — keyless audit and `--provider-inventory`
+- [`docs/initial-fleet-batch.md`](docs/initial-fleet-batch.md) — public fleet batches
+- [`docs/security-audit-2026-08-07.md`](docs/security-audit-2026-08-07.md) — initial security review
+

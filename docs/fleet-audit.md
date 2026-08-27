@@ -6,21 +6,29 @@ It is intended for fleet rollout planning, not secret discovery.
 
 ## Data boundary
 
-The scanner reads only:
+The default scanner reads only:
 
 - Git tracked path names and file modes;
 - `.gitignore` behavior for synthetic path names;
 - the presence of the canonical ciphertext `.gitattributes` rule;
 - SOPS `path_regex` policy declarations in `.sops.yaml`.
 
+`--provider-inventory` additionally:
+
+- counts tracked `env/dec/*` paths (a conflict; plaintext must never be tracked);
+- parses only the variable *name* before `=` from tracked `env/enc/{dev,prod}.env.enc` blobs;
+- reports SendGrid and Twilio presence as `none`, `dev`, `prod`, or `dev+prod`.
+
 It does **not**:
 
 - decrypt ciphertext;
 - read dotenv values;
-- read ciphertext values;
+- emit ciphertext values or ENC[] payloads;
 - hash or inventory application values;
 - require an age/KMS/private identity;
 - print matched secret content.
+
+This inventory answers whether a provider is represented in encrypted bundles. It is not observability and does not replace ores-otel.
 
 The canonical policy files must themselves be **tracked**. Untracked local `.sops.yaml`, `.gitignore`, or `.gitattributes` files classify as partial adoption so a dirty working tree cannot make a repository appear compliant when a fresh clone is not.
 
@@ -44,6 +52,12 @@ The default report is TSV:
 repository  status  tracked_plaintext  unexpected_env_enc  tracked_symlinks  sops_rules  ignore_contract  ciphertext_attributes
 ```
 
+With `--provider-inventory` the header gains `tracked_env_dec`, `sendgrid_envs`, and `twilio_envs`:
+
+```sh
+ores-sops-fleet-audit --provider-inventory ../repo-a ../repo-b
+```
+
 `--strict` exits non-zero unless every scanned repository is fully adopted. It returns a higher failure code for a conflicting repository than for a merely partial/not-adopted repository, while still printing the complete report.
 
 ## Statuses
@@ -51,7 +65,7 @@ repository  status  tracked_plaintext  unexpected_env_enc  tracked_symlinks  sop
 - `adopted`: tracked exact dev/prod SOPS rules, tracked canonical ignore behavior, and tracked ciphertext line-ending attributes are present with no tracked path conflict.
 - `not-adopted`: no SOPS dotenv adoption signal was found.
 - `partial`: some adoption signal exists, but the tracked contract is incomplete; this includes canonical-looking policy files that exist only in the local working tree.
-- `conflicting`: tracked plaintext dotenv, an unexpected `env/enc/*` path, a tracked symlink policy/ciphertext path, or a broad/noncanonical `env/enc` SOPS rule was found.
+- `conflicting`: tracked plaintext dotenv (including tracked `env/dec/*`), an unexpected `env/enc/*` path, a tracked symlink policy/ciphertext path, or a broad/noncanonical `env/enc` SOPS rule was found.
 
 The report uses counts and policy-state labels rather than file contents. Repository labels are local checkout basenames so credentials embedded in unusual remote URLs cannot be echoed accidentally.
 

@@ -1,14 +1,24 @@
-# Initial ORESoftware SOPS fleet batch
+# ORESoftware SOPS fleet batches
 
-The first keyless fleet report intentionally scans a small public batch before any broad mutation.
+The keyless fleet report scans public repositories before any broad mutation. Batch 1 remains the original five; batch 2 adds five more public candidates.
 
-## Included candidates
+## Batch 1 candidates
 
 - `devops-slack` — completed dummy-value real-consumer pilot; expected to be partial until a durable tracked key policy/ciphertext is intentionally provisioned.
 - `slack-ores-integrations` — small active application with a tracked `.env.example`; useful next consumer candidate.
 - `happy-wakey.rs` — documented root `.env` workflow and flags/env configuration; useful Rust consumer candidate.
 - `ai-agent-coordinator.rs` — active coordinator repository with documented dotenv bootstrap; included for policy visibility, not automatic mutation.
 - `flags-2-env` — adjacent ORESoftware environment tooling; included to detect whether the SOPS standard should interoperate without forcing secret storage into a repo that may not need it.
+
+## Batch 2 candidates
+
+- `r2g` — downstream-consumer test runner used across language SDKs.
+- `r2g.example` — example consumer of r2g.
+- `r2g.docker` — containerized r2g path.
+- `ai-agent-bridge.rs` — public agent-bridge service candidate.
+- `oresoftware.github.io` — public org site; included for policy visibility, not automatic secret storage.
+
+`ORESoftware/project-registry` stays excluded: it is private and would require repository credentials, which would weaken this keyless survey lane.
 
 ## Explicit exclusions from automatic mutation
 
