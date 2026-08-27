@@ -28,9 +28,9 @@
 
         ores-sops-fleet-audit = final.writeShellApplication {
           name = "ores-sops-fleet-audit";
-          # Intentionally keyless: this scanner reads only tracked path metadata,
-          # ignore/attribute policy, and SOPS path_regex declarations. It never
-          # decrypts or parses application/ciphertext values.
+          # Default scan is keyless path/policy metadata. --provider-inventory
+          # additionally reads variable *names* from tracked env/enc blobs and
+          # never emits ciphertext or plaintext values.
           runtimeInputs = with final; [
             git
             coreutils
@@ -44,6 +44,23 @@
     {
       overlays.default = overlay;
 
+      # Nix-shell fallback when ores-sops is not yet on PATH. Canonical
+      # creation is `ores-sops ensure-dec` (symlink-safe, fail-closed).
+      # Consumers must not mkdir/chmod env/dec themselves; see
+      # docs/consumer-boundary.md. Empty directories do not survive Git, so
+      # every shell entry recreates the ignored plaintext boundary.
+      # Refuse repo-controlled symlink redirection instead of following it.
+      lib.prepareEnvDec = ''
+        _ores_sops_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+        if [ -L "$_ores_sops_root/env" ] || [ -L "$_ores_sops_root/env/dec" ]; then
+          echo "env: refusing to prepare symlinked env/dec" >&2
+        else
+          mkdir -p "$_ores_sops_root/env/dec"
+          chmod 700 "$_ores_sops_root/env/dec"
+        fi
+        unset _ores_sops_root
+      '';
+
       # Drop this into any repo's devShell to get the hooks installed and the
       # active environment kept current:
       #
@@ -55,7 +72,7 @@
       # It deliberately does NOT pick an environment for you: auto-decrypting a
       # default would write live credentials to disk in a repo you only opened
       # to read. The first activation stays explicit; after that it self-updates.
-      lib.shellHook = ''
+      lib.shellHook = self.lib.prepareEnvDec + ''
         export SOPS_AGE_KEY_FILE="''${SOPS_AGE_KEY_FILE:-$HOME/.config/sops/age/keys.txt}"
 
         if command -v ores-sops >/dev/null 2>&1 && git rev-parse --git-dir >/dev/null 2>&1; then
@@ -98,6 +115,27 @@
         checks.entrypoint-shellcheck = pkgs.runCommand "entrypoint-shellcheck"
           { nativeBuildInputs = [ pkgs.shellcheck ]; } ''
           shellcheck --shell=sh ${./examples/docker/entrypoint.sh}
+          touch "$out"
+        '';
+
+        checks.prepare-env-dec = pkgs.runCommand "prepare-env-dec"
+          { nativeBuildInputs = [ pkgs.git pkgs.coreutils ]; } ''
+          mkdir normal
+          cd normal
+          git init -q
+          ${self.lib.prepareEnvDec}
+          test -d env/dec
+          test "$(stat -c '%a' env/dec 2>/dev/null || stat -f '%Lp' env/dec)" = 700
+          cd ..
+
+          mkdir redirected outside
+          cd redirected
+          git init -q
+          ln -s ../outside env
+          ${self.lib.prepareEnvDec}
+          test ! -e ../outside/dec
+          cd ..
+
           touch "$out"
         '';
 
