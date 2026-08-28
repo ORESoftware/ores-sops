@@ -118,6 +118,13 @@
           touch "$out"
         '';
 
+        checks.helper-shellcheck = pkgs.runCommand "helper-shellcheck"
+          { nativeBuildInputs = [ pkgs.shellcheck ]; } ''
+          shellcheck --shell=bash ${./ores-sops}
+          shellcheck --shell=bash ${./scripts/fleet-audit.sh}
+          touch "$out"
+        '';
+
         checks.prepare-env-dec = pkgs.runCommand "prepare-env-dec"
           { nativeBuildInputs = [ pkgs.git pkgs.coreutils ]; } ''
           mkdir normal
@@ -154,6 +161,8 @@
           export HOME="$TMPDIR/home"
           mkdir -p "$HOME"
           cp -r ${./tests} ./tests
+          cp -r ${./templates} ./templates
+          cp -r ${./examples} ./examples
           bats ./tests
           touch "$out"
         '';

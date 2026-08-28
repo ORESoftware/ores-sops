@@ -156,6 +156,80 @@ EOF_PROD
   [[ "$output" != *"prod-secret-marker"* ]]
 }
 
+@test "default scan keeps the original header even when provider names exist" {
+  repo="$ROOT/default-scan"
+  init_repo "$repo"
+  write_adopted_policy "$repo"
+  mkdir -p "$repo/env/enc"
+  cat >"$repo/env/enc/dev.env.enc" <<'EOF_DEV'
+SENDGRID_API_KEY=ENC[AES256_GCM,data:must-not-print,iv:a,tag:b,type:str]
+sops_version=3.13.3
+EOF_DEV
+  git -C "$repo" add env/enc/dev.env.enc
+  git -C "$repo" commit -qm default-scan
+  chmod 000 "$repo/env/enc/dev.env.enc"
+
+  run ores-sops-fleet-audit "$repo"
+  [ "$status" -eq 0 ]
+  header="$(printf '%s\n' "$output" | head -n1)"
+  [ "$header" = $'repository\tstatus\ttracked_plaintext\tunexpected_env_enc\ttracked_symlinks\tsops_rules\tignore_contract\tciphertext_attributes' ]
+  [[ "$output" != *"sendgrid_envs"* ]]
+  [[ "$output" != *"twilio_envs"* ]]
+  [[ "$output" != *"must-not-print"* ]]
+  [[ "$output" != *"SENDGRID_API_KEY"* ]]
+}
+
+@test "provider inventory reports none when only ciphertext values mention the provider" {
+  repo="$ROOT/value-only"
+  init_repo "$repo"
+  write_adopted_policy "$repo"
+  mkdir -p "$repo/env/enc"
+  cat >"$repo/env/enc/dev.env.enc" <<'EOF_DEV'
+UNRELATED_TOKEN=ENC[AES256_GCM,data:SENDGRID_API_KEY,iv:a,tag:b,type:str]
+sops_version=3.13.3
+EOF_DEV
+  git -C "$repo" add env/enc/dev.env.enc
+  git -C "$repo" commit -qm value-only
+  chmod 000 "$repo/env/enc/dev.env.enc"
+
+  run ores-sops-fleet-audit --provider-inventory "$repo"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *$'value-only\tadopted\t0\t0\t0\texact\tok\tok\t0\tnone\tnone'* ]]
+  [[ "$output" != *"SENDGRID_API_KEY"* ]]
+}
+
+@test "provider inventory ignores untracked env/enc blobs" {
+  repo="$ROOT/untracked-enc"
+  init_repo "$repo"
+  write_adopted_policy "$repo"
+  mkdir -p "$repo/env/enc"
+  cat >"$repo/env/enc/dev.env.enc" <<'EOF_DEV'
+SENDGRID_API_KEY=ENC[AES256_GCM,data:untracked-marker,iv:a,tag:b,type:str]
+sops_version=3.13.3
+EOF_DEV
+
+  run ores-sops-fleet-audit --provider-inventory "$repo"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *$'untracked-enc\tadopted\t0\t0\t0\texact\tok\tok\t0\tnone\tnone'* ]]
+  [[ "$output" != *"untracked-marker"* ]]
+}
+
+@test "provider inventory reports none none for adopted repos without provider keys" {
+  repo="$ROOT/no-providers"
+  init_repo "$repo"
+  write_adopted_policy "$repo"
+
+  run ores-sops-fleet-audit --provider-inventory "$repo"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *$'no-providers\tadopted\t0\t0\t0\texact\tok\tok\t0\tnone\tnone'* ]]
+}
+
+@test "unknown fleet-audit option fails closed without scanning" {
+  run ores-sops-fleet-audit --decrypt-please "$ROOT"
+  [ "$status" -eq 64 ]
+  [[ "$output" == *"unknown option"* ]]
+}
+
 @test "provider inventory calls out tracked env dec files" {
   repo="$ROOT/tracked-dec"
   init_repo "$repo"
