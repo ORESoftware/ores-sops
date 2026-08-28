@@ -230,6 +230,70 @@ EOF_DEV
   [[ "$output" == *"unknown option"* ]]
 }
 
+@test "consumer bypass counts unguarded mkdir without printing recipe bodies" {
+  repo="$ROOT/bypass"
+  init_repo "$repo"
+  write_adopted_policy "$repo"
+  cat >"$repo/justfile" <<'EOF_JUST'
+use name:
+    mkdir -p env/dec
+    chmod 700 env/dec
+    ores-sops use {{ name }}
+EOF_JUST
+  git -C "$repo" add justfile
+  git -C "$repo" commit -qm bypass
+
+  run ores-sops-fleet-audit --consumer-bypass "$repo"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *$'bypass\tadopted\t0\t0\t0\texact\tok\tok\t2\tmissing'* ]]
+  [[ "$output" != *"ores-sops use"* ]]
+}
+
+@test "consumer bypass counts env.just variable mkdir without printing the recipe" {
+  repo="$ROOT/just-var"
+  init_repo "$repo"
+  write_adopted_policy "$repo"
+  mkdir -p "$repo/.just"
+  cat >"$repo/.just/env.just" <<'EOF_JUST'
+_env-dec:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    path="{{ _dec }}"
+    mkdir -p "$path"
+    chmod 700 "$path"
+EOF_JUST
+  git -C "$repo" add .just/env.just
+  git -C "$repo" commit -qm just-var
+
+  run ores-sops-fleet-audit --consumer-bypass "$repo"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *$'just-var\tadopted\t0\t0\t0\texact\tok\tok\t2\tmissing'* ]]
+  [[ "$output" != *'_env-dec'* ]]
+  [[ "$output" != *'mkdir -p "$path"'* ]]
+}
+
+@test "consumer bypass reports ok dockerignore without unguarded mkdir" {
+  repo="$ROOT/guarded"
+  init_repo "$repo"
+  write_adopted_policy "$repo"
+  cat >"$repo/justfile" <<'EOF_JUST'
+use name:
+    ores-sops ensure-dec
+    ores-sops use {{ name }}
+EOF_JUST
+  cat >"$repo/.dockerignore" <<'EOF_DOCKER'
+.env
+env/dec
+env/enc
+EOF_DOCKER
+  git -C "$repo" add justfile .dockerignore
+  git -C "$repo" commit -qm guarded
+
+  run ores-sops-fleet-audit --consumer-bypass "$repo"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *$'guarded\tadopted\t0\t0\t0\texact\tok\tok\t0\tok'* ]]
+}
+
 @test "provider inventory calls out tracked env dec files" {
   repo="$ROOT/tracked-dec"
   init_repo "$repo"

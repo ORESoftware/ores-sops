@@ -11,7 +11,7 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: ores-sops-fleet-audit [--strict] [--provider-inventory] [repo-path ...]
+Usage: ores-sops-fleet-audit [--strict] [--provider-inventory] [--consumer-bypass] [repo-path ...]
 
 Emit one TSV row per local Git repository with only non-secret conformance data.
 When no repository path is supplied, audit the current repository.
@@ -26,6 +26,11 @@ Statuses:
 --provider-inventory adds tracked_env_dec, sendgrid_envs, and twilio_envs columns.
 Provider states are none, dev, prod, or dev+prod. The scanner parses only the
 variable name before '=' from tracked env/enc blobs and never prints values.
+
+--consumer-bypass adds unguarded_mkdir and dockerignore columns. unguarded_mkdir
+counts tracked Just/shell lines that mkdir/chmod env/dec (including Just-variable
+forms "$path" / "$dec") before ores-sops can refuse a symlink. Matching lines are
+never printed. dockerignore is ok, partial, missing, untracked, or invalid.
 
 --strict exits non-zero unless every repository is adopted. Without --strict,
 findings are reported but do not stop a fleet scan.
@@ -103,6 +108,48 @@ attrs_state() {
   grep -Fqx '/env/enc/*.env.enc text eol=lf' .gitattributes && printf 'ok\n' || printf 'missing\n'
 }
 
+unguarded_mkdir_count() {
+  local f n count=0
+  while IFS= read -r -d '' f; do
+    case "$f" in
+      justfile|Justfile|*.just|.just/*)
+        # Just recipes often mkdir via a Just variable ($path / $dec bound to env/dec)
+        # after checking only that leaf. Count those as the same bypass class.
+        # The regex must match a literal "$path" / "$dec" in the file, not expand them.
+        # shellcheck disable=SC2016
+        n="$(git show ":$f" 2>/dev/null | grep -cE 'mkdir[[:space:]]+-p[[:space:]]+.*env/dec|mkdir[[:space:]]+-p[[:space:]]+"\$path"|mkdir[[:space:]]+-p[[:space:]]+"\$dec"|chmod[[:space:]]+7?00[[:space:]]+(env/dec|"\$path"|"\$dec")' || true)"
+        count=$((count + n))
+        ;;
+      scripts/*.sh)
+        n="$(git show ":$f" 2>/dev/null | grep -cE 'mkdir[[:space:]]+-p[[:space:]]+.*env/dec|chmod[[:space:]]+700[[:space:]]+env/dec' || true)"
+        count=$((count + n))
+        ;;
+    esac
+  done < <(git ls-files -z)
+  printf '%d\n' "$count"
+}
+
+dockerignore_state() {
+  local file=".dockerignore"
+  if [ ! -e "$file" ]; then
+    printf 'missing\n'
+    return
+  fi
+  if ! is_tracked "$file"; then
+    printf 'untracked\n'
+    return
+  fi
+  if [ -L "$file" ] || [ ! -f "$file" ]; then
+    printf 'invalid\n'
+    return
+  fi
+  if grep -Fq 'env/dec' "$file" && grep -Fq 'env/enc' "$file"; then
+    printf 'ok\n'
+  else
+    printf 'partial\n'
+  fi
+}
+
 provider_env_state() {
   local pattern="$1"
   local environment file
@@ -136,8 +183,9 @@ provider_env_state() {
 audit_one() {
   local requested="$1" root label
   local plaintext=0 unexpected=0 symlinks=0 env_enc_count=0 signals=0
-  local tracked_env_dec=0
-  local f mode rules ignore attrs status sendgrid_envs twilio_envs
+  local tracked_env_dec=0 unguarded_mkdir=0
+  local f mode rules ignore attrs status sendgrid_envs twilio_envs dockerignore
+  local extra=()
 
   root="$(git -C "$requested" rev-parse --show-toplevel 2>/dev/null)" || {
     printf 'ores-sops-fleet-audit: not a git repository: %q\n' "$requested" >&2
@@ -197,16 +245,24 @@ audit_one() {
       status=partial
     fi
 
+    extra=()
     if [ "$provider_inventory" -eq 1 ]; then
       sendgrid_envs="$(provider_env_state '(^|_)SENDGRID(_|$)')"
       twilio_envs="$(provider_env_state '(^|_)TWILIO(_|$)')"
-      printf '%s\t%s\t%d\t%d\t%d\t%s\t%s\t%s\t%d\t%s\t%s\n' \
-        "$label" "$status" "$plaintext" "$unexpected" "$symlinks" "$rules" "$ignore" "$attrs" \
-        "$tracked_env_dec" "$sendgrid_envs" "$twilio_envs"
-    else
-      printf '%s\t%s\t%d\t%d\t%d\t%s\t%s\t%s\n' \
-        "$label" "$status" "$plaintext" "$unexpected" "$symlinks" "$rules" "$ignore" "$attrs"
+      extra+=("$tracked_env_dec" "$sendgrid_envs" "$twilio_envs")
     fi
+    if [ "$consumer_bypass" -eq 1 ]; then
+      unguarded_mkdir="$(unguarded_mkdir_count)"
+      dockerignore="$(dockerignore_state)"
+      extra+=("$unguarded_mkdir" "$dockerignore")
+    fi
+
+    printf '%s\t%s\t%d\t%d\t%d\t%s\t%s\t%s' \
+      "$label" "$status" "$plaintext" "$unexpected" "$symlinks" "$rules" "$ignore" "$attrs"
+    if [ "${#extra[@]}" -gt 0 ]; then
+      printf '\t%s' "${extra[@]}"
+    fi
+    printf '\n'
 
     case "$status" in
       adopted) exit 0 ;;
@@ -218,11 +274,13 @@ audit_one() {
 
 strict=0
 provider_inventory=0
+consumer_bypass=0
 repos=()
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --strict) strict=1 ;;
     --provider-inventory) provider_inventory=1 ;;
+    --consumer-bypass) consumer_bypass=1 ;;
     -h|--help) usage; exit 0 ;;
     --) shift; repos+=("$@"); break ;;
     -*) printf 'ores-sops-fleet-audit: unknown option: %s\n' "$1" >&2; usage >&2; exit 64 ;;
@@ -233,11 +291,14 @@ done
 
 [ "${#repos[@]}" -gt 0 ] || repos=(.)
 
+header=$'repository\tstatus\ttracked_plaintext\tunexpected_env_enc\ttracked_symlinks\tsops_rules\tignore_contract\tciphertext_attributes'
 if [ "$provider_inventory" -eq 1 ]; then
-  printf 'repository\tstatus\ttracked_plaintext\tunexpected_env_enc\ttracked_symlinks\tsops_rules\tignore_contract\tciphertext_attributes\ttracked_env_dec\tsendgrid_envs\ttwilio_envs\n'
-else
-  printf 'repository\tstatus\ttracked_plaintext\tunexpected_env_enc\ttracked_symlinks\tsops_rules\tignore_contract\tciphertext_attributes\n'
+  header+=$'\ttracked_env_dec\tsendgrid_envs\ttwilio_envs'
 fi
+if [ "$consumer_bypass" -eq 1 ]; then
+  header+=$'\tunguarded_mkdir\tdockerignore'
+fi
+printf '%s\n' "$header"
 
 worst=0
 for repo in "${repos[@]}"; do

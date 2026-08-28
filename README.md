@@ -173,7 +173,7 @@ The TSV report contains only repository basename, adoption status, tracked viola
 
 Statuses are `adopted`, `not-adopted`, `partial`, and `conflicting`. Canonical policy files must be tracked; untracked local policy cannot make a dirty working tree look compliant. `--strict` exits non-zero unless every scanned repository is adopted.
 
-See [`docs/fleet-audit.md`](docs/fleet-audit.md) for the data boundary and rollout workflow. Opt-in `--provider-inventory` adds SendGrid/Twilio *name* presence per environment without printing values.
+See [`docs/fleet-audit.md`](docs/fleet-audit.md) for the data boundary and rollout workflow. Opt-in `--provider-inventory` adds SendGrid/Twilio *name* presence per environment without printing values. `--consumer-bypass` counts unguarded `env/dec` mkdir/chmod lines (never the lines themselves) and labels Docker build-context exclusions.
 
 ## Git hooks
 

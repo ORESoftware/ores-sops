@@ -58,7 +58,15 @@ With `--provider-inventory` the header gains `tracked_env_dec`, `sendgrid_envs`,
 ores-sops-fleet-audit --provider-inventory ../repo-a ../repo-b
 ```
 
-`--strict` exits non-zero unless every scanned repository is fully adopted. It returns a higher failure code for a conflicting repository than for a merely partial/not-adopted repository, while still printing the complete report.
+`--consumer-bypass` adds `unguarded_mkdir` and `dockerignore`. `unguarded_mkdir` is a count of tracked Just/shell lines that `mkdir`/`chmod` `env/dec` (including Just-variable forms `"$path"` / `"$dec"`) before `ores-sops ensure-dec` can refuse a symlink. Matching recipe bodies are never printed. `dockerignore` is `ok` when a tracked file mentions both `env/dec` and `env/enc`, otherwise `partial`, `missing`, `untracked`, or `invalid`.
+
+The two flags combine:
+
+```sh
+ores-sops-fleet-audit --provider-inventory --consumer-bypass ../repo-a ../repo-b
+```
+
+`--strict` exits non-zero unless every scanned repository is fully adopted. It returns a higher failure code for a conflicting repository than for a merely partial/not-adopted repository, while still printing the complete report. Consumer-bypass columns are informational and do not change adopted/conflicting status.
 
 ## Statuses
 
