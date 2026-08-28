@@ -117,7 +117,7 @@ unguarded_mkdir_count() {
         # after checking only that leaf. Count those as the same bypass class.
         # The regex must match a literal "$path" / "$dec" in the file, not expand them.
         # shellcheck disable=SC2016
-        n="$(git show ":$f" 2>/dev/null | grep -cE 'mkdir[[:space:]]+-p[[:space:]]+.*env/dec|mkdir[[:space:]]+-p[[:space:]]+"\$path"|mkdir[[:space:]]+-p[[:space:]]+"\$dec"|chmod[[:space:]]+7?00[[:space:]]+(env/dec|"\$path"|"\$dec")' || true)"
+        n="$(git show ":$f" 2>/dev/null | grep -cE 'mkdir[[:space:]]+-p[[:space:]]+.*env/dec|mkdir[[:space:]]+-p[[:space:]]+"\$path"|mkdir[[:space:]]+-p[[:space:]]+"\$dec"|install[[:space:]]+-d[[:space:]]+(-m[[:space:]]+7?00[[:space:]]+)?env/dec|chmod[[:space:]]+7?00[[:space:]]+(env/dec|"\$path"|"\$dec")' || true)"
         count=$((count + n))
         ;;
       scripts/*.sh)

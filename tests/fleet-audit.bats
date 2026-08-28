@@ -272,6 +272,24 @@ EOF_JUST
   [[ "$output" != *'mkdir -p "$path"'* ]]
 }
 
+@test "consumer bypass counts install -d env/dec without printing the recipe" {
+  repo="$ROOT/install-d"
+  init_repo "$repo"
+  write_adopted_policy "$repo"
+  cat >"$repo/justfile" <<'EOF_JUST'
+decrypt:
+    install -d -m 700 env/dec
+    sops --decrypt env/enc/dev.env.enc
+EOF_JUST
+  git -C "$repo" add justfile
+  git -C "$repo" commit -qm install-d
+
+  run ores-sops-fleet-audit --consumer-bypass "$repo"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *$'install-d\tadopted\t0\t0\t0\texact\tok\tok\t1\tmissing'* ]]
+  [[ "$output" != *"sops --decrypt"* ]]
+}
+
 @test "consumer bypass reports ok dockerignore without unguarded mkdir" {
   repo="$ROOT/guarded"
   init_repo "$repo"
