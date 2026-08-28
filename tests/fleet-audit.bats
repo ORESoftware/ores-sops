@@ -290,6 +290,27 @@ EOF_JUST
   [[ "$output" != *"sops --decrypt"* ]]
 }
 
+@test "consumer bypass ignores policy scripts that mention mkdir as a forbidden string" {
+  repo="$ROOT/policy-mention"
+  init_repo "$repo"
+  write_adopted_policy "$repo"
+  mkdir -p "$repo/scripts"
+  cat >"$repo/scripts/check-env-policy.sh" <<'EOF_SH'
+#!/usr/bin/env bash
+python3 - <<'PY'
+text = open("justfile").read()
+if "mkdir -p env/dec" in text:
+    raise SystemExit("forbidden")
+PY
+EOF_SH
+  git -C "$repo" add scripts/check-env-policy.sh
+  git -C "$repo" commit -qm policy-mention
+
+  run ores-sops-fleet-audit --consumer-bypass "$repo"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *$'policy-mention\tadopted\t0\t0\t0\texact\tok\tok\t0\tmissing'* ]]
+}
+
 @test "consumer bypass reports ok dockerignore without unguarded mkdir" {
   repo="$ROOT/guarded"
   init_repo "$repo"

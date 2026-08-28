@@ -121,7 +121,9 @@ unguarded_mkdir_count() {
         count=$((count + n))
         ;;
       scripts/*.sh)
-        n="$(git show ":$f" 2>/dev/null | grep -cE 'mkdir[[:space:]]+-p[[:space:]]+.*env/dec|chmod[[:space:]]+700[[:space:]]+env/dec' || true)"
+        # Count shell commands only. Policy scripts that mention the forbidden
+        # mkdir string in a Python check must not inflate the bypass tally.
+        n="$(git show ":$f" 2>/dev/null | grep -cE '^[[:space:]]*mkdir[[:space:]]+-p[[:space:]].*env/dec|^[[:space:]]*chmod[[:space:]]+700[[:space:]]+env/dec' || true)"
         count=$((count + n))
         ;;
     esac
