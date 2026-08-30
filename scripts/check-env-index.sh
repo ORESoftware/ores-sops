@@ -63,7 +63,7 @@ done < "$listing"
 # Snapshot-based and binary-aware; never print matched material. Split markers
 # keep this scanner and its synthetic test source from matching themselves.
 age_marker='AGE-SE''CRET-KEY-1'
-pem_marker='-----BEGIN .*''PRIVATE KEY-----'
+pem_marker='-----BE''GIN [A-Z ]*PRIVATE KEY-----'
 rc=0
 git grep -a -q -E -e "$age_marker" -e "$pem_marker" "$tree" -- . || rc=$?
 case "$rc" in

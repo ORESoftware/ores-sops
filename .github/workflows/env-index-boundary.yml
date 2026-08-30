@@ -24,8 +24,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          bash -n scripts/check-env-index.sh tests/test-env-boundary.sh tests/test-env-index-sops.sh
+          for script in scripts/check-env-index.sh tests/test-env-boundary.sh tests/test-env-index-self.sh tests/test-env-index-sops.sh; do
+            bash -n "$script"
+          done
           bash scripts/check-env-index.sh
+          bash tests/test-env-index-self.sh
           bash tests/test-env-boundary.sh
   generated-sops:
     runs-on: ubuntu-24.04
