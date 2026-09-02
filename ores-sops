@@ -51,7 +51,10 @@ count_exact_sops_rule() {
   root="$(repo_root)"
   [ -f "$root/.sops.yaml" ] || { printf '0
 '; return; }
-  awk -v expected="path_regex: ^env/enc/${environment}\.env\.enc$" '
+  awk -v environment="$environment" '
+    BEGIN {
+      expected = "path_regex: ^env/enc/" environment "\.env\.enc$"
+    }
     {
       line=$0
       sub(/^[[:space:]]*-[[:space:]]*/, "", line)
@@ -894,7 +897,7 @@ cmd_init() {
   if [ ! -f "$root/.sops.yaml" ]; then
     cat >"$root/.sops.yaml" <<EOF_SOPS
 # Bootstrap policy. Dev, optional stage, and prod use separate exact path rules.
-# The default local recipient scope is `all` for backward-compatible recovery.
+# The default local recipient scope is all for backward-compatible recovery.
 # Prefer scoped human/workload recipients and run the access audit before use.
 creation_rules:
   - path_regex: ^env/enc/dev\.env\.enc\$
