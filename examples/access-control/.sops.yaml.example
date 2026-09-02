@@ -7,6 +7,12 @@ creation_rules:
       - age1_DEV_CI_REPLACE_WITH_REAL_PUBLIC_RECIPIENT
       - age1_RECOVERY_REPLACE_WITH_REAL_PUBLIC_RECIPIENT
 
+  - path_regex: ^env/enc/stage\.env\.enc$
+    age:
+      - age1_RELEASE_ENGINEER_REPLACE_WITH_REAL_PUBLIC_RECIPIENT
+      - age1_STAGE_DEPLOY_REPLACE_WITH_REAL_PUBLIC_RECIPIENT
+      - age1_RECOVERY_REPLACE_WITH_REAL_PUBLIC_RECIPIENT
+
   - path_regex: ^env/enc/prod\.env\.enc$
     age:
       - age1_PROD_OPERATOR_REPLACE_WITH_REAL_PUBLIC_RECIPIENT
