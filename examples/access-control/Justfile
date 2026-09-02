@@ -1,0 +1,25 @@
+set shell := ["bash", "-euo", "pipefail", "-c"]
+
+# Keyless desired-policy gate. It never opens ciphertext or private identities.
+access-audit:
+    ores-sops-access-audit check
+
+# Explicitly display public recipients. No private identity or secret value is read.
+public-recipients:
+    ores-sops-access-audit show
+
+# Synchronize an existing ciphertext's wrapped file key with its exact rule.
+rekey environment:
+    case "{{environment}}" in dev|prod) ;; *) echo "expected dev or prod" >&2; exit 2 ;; esac
+    sops updatekeys -y --input-type dotenv "env/enc/{{environment}}.env.enc"
+    ores-sops-access-audit check
+
+# Use after a recipient removal when a fresh per-file data key is required.
+rotate-data-key environment:
+    case "{{environment}}" in dev|prod) ;; *) echo "expected dev or prod" >&2; exit 2 ;; esac
+    sops --rotate --in-place --input-type dotenv --output-type dotenv "env/enc/{{environment}}.env.enc"
+    ores-sops-access-audit check
+
+verify:
+    ores-sops verify
+    ores-sops-access-audit check
