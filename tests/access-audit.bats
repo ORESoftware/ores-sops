@@ -60,7 +60,7 @@ setup() {
 
   run ores-sops-access-audit check
   [ "$status" -ne 0 ]
-  [[ "$output" == *"no environment-exclusive recipient"* ]]
+  [[ "$output" == *"every dev recipient can decrypt prod"* ]]
 }
 
 @test "dev access contained in prod fails because every dev key would unlock prod" {
@@ -71,18 +71,29 @@ setup() {
 
   run ores-sops-access-audit check
   [ "$status" -ne 0 ]
-  [[ "$output" == *"dev has no environment-exclusive recipient"* ]]
+  [[ "$output" == *"every dev recipient can decrypt prod"* ]]
 }
 
-@test "prod access contained in dev fails because prod lacks an isolated identity" {
+@test "prod recipients may also retain dev access while dev-only users stay isolated" {
   write_policy "      - $DEV_RECIPIENT
       - $PROD_RECIPIENT
       - $RECOVERY_RECIPIENT" "      - $PROD_RECIPIENT
       - $RECOVERY_RECIPIENT"
 
   run ores-sops-access-audit check
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"dev-only=1, prod-only=0"* ]]
+}
+
+@test "strict policy can require a distinct production-only identity" {
+  write_policy "      - $DEV_RECIPIENT
+      - $PROD_RECIPIENT
+      - $RECOVERY_RECIPIENT" "      - $PROD_RECIPIENT
+      - $RECOVERY_RECIPIENT"
+
+  run ores-sops-access-audit check --require-prod-exclusive
   [ "$status" -ne 0 ]
-  [[ "$output" == *"prod has no environment-exclusive recipient"* ]]
+  [[ "$output" == *"--require-prod-exclusive was requested"* ]]
 }
 
 @test "one recipient per environment needs an explicit bootstrap override" {
