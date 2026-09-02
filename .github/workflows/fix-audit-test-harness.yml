@@ -1,0 +1,61 @@
+name: Fix audit test harness
+
+on:
+  push:
+    branches:
+      - audit/encrypted-env-contract
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fix-audit-test-harness-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out exact branch head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Correct fixture staging and module registration
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          from pathlib import Path
+
+          path = Path('test/test_audit_env_contract.py')
+          text = path.read_text(encoding='utf-8')
+          text = text.replace(
+              'import subprocess\nimport tempfile\nimport unittest\n',
+              'import subprocess\nimport sys\nimport tempfile\nimport unittest\n',
+              1,
+          )
+          text = text.replace(
+              "AUDIT = importlib.util.module_from_spec(SPEC)\nSPEC.loader.exec_module(AUDIT)\n",
+              "AUDIT = importlib.util.module_from_spec(SPEC)\nsys.modules[SPEC.name] = AUDIT\nSPEC.loader.exec_module(AUDIT)\n",
+              1,
+          )
+          text = text.replace(
+              "subprocess.run(['git', 'add', '-A'], cwd=self.root, check=True)",
+              "subprocess.run(['git', 'add', '-f', '-A'], cwd=self.root, check=True)",
+              1,
+          )
+          path.write_text(text, encoding='utf-8')
+          PY
+
+          rm -- .github/workflows/fix-audit-test-harness.yml
+          git config user.name 'ores-gh-bots'
+          git config user.email 'ores-gh-bots@users.noreply.github.com'
+          git add test/test_audit_env_contract.py .github/workflows/fix-audit-test-harness.yml
+          if ! git diff --cached --quiet; then
+            git commit -m 'test: make leak fixtures visible to the Git index audit'
+            git push origin "HEAD:${GITHUB_REF_NAME}"
+          fi
