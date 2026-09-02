@@ -72,7 +72,15 @@ jobs:
             test "$(stat -c '%a' env/dec)" = 700
 
             HOME="$home" "$GITHUB_WORKSPACE/ores-sops" verify
-            bash "$GITHUB_WORKSPACE/scripts/access-audit.sh" check --min-recipients 1 --policy-only
+
+            # Legacy init remains usable for bootstrap, but intentionally is not
+            # accepted as a least-privilege production recipient matrix.
+            if bash "$GITHUB_WORKSPACE/scripts/access-audit.sh" check --min-recipients 1 --policy-only \
+              >/tmp/ores-sops-legacy-access.out 2>&1; then
+              echo 'expected identical bootstrap recipients to fail the access audit' >&2
+              exit 1
+            fi
+            grep -q 'no environment-exclusive recipient' /tmp/ores-sops-legacy-access.out
 
             if HOME="$home" "$GITHUB_WORKSPACE/ores-sops" use stage >/tmp/ores-sops-stage-disabled.out 2>&1; then
               echo 'expected unconfigured stage to fail' >&2
