@@ -1,0 +1,50 @@
+name: Apply asserted stage contract migration
+
+on:
+  push:
+    branches:
+      - feat/stage-environment-contract-v0.4
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-stage-contract-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    if: ${{ !contains(github.event.head_commit.message, '[stage-contract-applied]') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: true
+
+      - name: Apply fail-closed migration
+        run: python3 scripts/apply-stage-contract.py
+
+      - name: Validate generated shell and diff
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n ores-sops
+          bash -n scripts/access-audit.sh
+          bash -n scripts/fleet-audit.sh
+          git diff --check
+
+      - name: Remove one-time migration machinery
+        run: rm scripts/apply-stage-contract.py .github/workflows/apply-stage-contract.yml
+
+      - name: Commit generated v0.4 contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'ORESoftware stage contract automation'
+          git config user.email 'bot@oresoftware.dev'
+          git add -A
+          git diff --cached --quiet && exit 0
+          git commit -m 'feat: add optional stage environment contract [stage-contract-applied]'
+          git push origin HEAD
