@@ -1,0 +1,102 @@
+name: one-shot empty dotenv verifier patch
+
+on:
+  push:
+    branches:
+      - fix/keyless-empty-dotenv-values-20260901
+    paths:
+      - .github/workflows/_patch-empty-dotenv-verifier.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: empty-dotenv-verifier-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  patch-and-test:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Check out patch branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Apply narrowly-scoped verifier and regression changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          from pathlib import Path
+
+          script = Path("ores-sops")
+          before = script.read_text(encoding="utf-8")
+          old = '''            case "$value" in
+              ENC\\[*) ;;
+              *) fail "approved ciphertext contains an obvious plaintext assignment: $shown" ;;
+            esac'''
+          new = '''            case "$value" in
+              ''|ENC\\[*) ;;
+              *) fail "approved ciphertext contains an obvious plaintext assignment: $shown" ;;
+            esac'''
+          if before.count(old) != 1:
+              raise SystemExit("expected exactly one plaintext-assignment verifier block")
+          script.write_text(before.replace(old, new), encoding="utf-8")
+
+          tests = Path("tests/ores-sops.bats")
+          before = tests.read_text(encoding="utf-8")
+          anchor = '''@test "verify rejects obvious plaintext assignment disguised as ciphertext" {
+  printf 'SECRET=plaintext\\nsops_mac=ENC[fake]\\n' > env/enc/dev.env.enc
+  git add env/enc/dev.env.enc
+  run ores-sops verify
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"obvious plaintext assignment"* ]]
+}
+'''
+          addition = anchor + '''
+@test "verify accepts an exact empty assignment because it contains no plaintext secret" {
+  printf 'OPTIONAL_PROVIDER_TOKEN=\\nsops_mac=ENC[fake]\\n' > env/enc/dev.env.enc
+  git add env/enc/dev.env.enc
+  run ores-sops verify
+  [ "$status" -eq 0 ]
+}
+
+@test "verify still rejects quoted or whitespace placeholder values" {
+  printf 'OPTIONAL_PROVIDER_TOKEN=""\\nsops_mac=ENC[fake]\\n' > env/enc/dev.env.enc
+  git add env/enc/dev.env.enc
+  run ores-sops verify
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"obvious plaintext assignment"* ]]
+}
+'''
+          if before.count(anchor) != 1:
+              raise SystemExit("expected exactly one plaintext-assignment regression anchor")
+          tests.write_text(before.replace(anchor, addition), encoding="utf-8")
+          PY
+
+          bash -n ./ores-sops
+          git diff --check
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
+        with:
+          flakehub: false
+
+      - name: Run the complete repository check
+        run: nix flake check -L
+
+      - name: Commit the tested patch and remove this workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          branch=${GITHUB_REF_NAME}
+          git rm -- .github/workflows/_patch-empty-dotenv-verifier.yml
+          git add ores-sops tests/ores-sops.bats
+          git diff --cached --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'fix(verify): permit exact empty dotenv values'
+          git push origin "HEAD:$branch"
