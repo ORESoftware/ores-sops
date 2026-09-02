@@ -24,16 +24,22 @@ separate hardware or workload identity used only for production can enable the
 stricter production-exclusive check:
 
 ```sh
-nix run github:ORESoftware/ores-sops#access-audit -- check
+# Production/CI gate: require both ciphertext files and exact recipient sync.
 nix run github:ORESoftware/ores-sops#access-audit -- \
-  check --require-prod-exclusive
+  check --require-ciphertext
 
-# Or, inside nix develop:
-ores-sops-access-audit check
+# Optional stricter policy: require a production-only recipient too.
+nix run github:ORESoftware/ores-sops#access-audit -- \
+  check --require-ciphertext --require-prod-exclusive
+
+# Bootstrap only, before ciphertext exists:
+ores-sops-access-audit check --policy-only
 ```
 
-The audit reads only `.sops.yaml`. It does not decrypt, open ciphertext, or read
-private identity files.
+The audit never decrypts. It reads `.sops.yaml` plus only the public
+`sops_age__list_*__map_recipient` metadata lines from existing ciphertext. It
+does not read private identity files, decrypted values, application assignments,
+or encrypted values. Normal `check` output reports counts only.
 
 ## How the cryptographic boundary works
 
@@ -100,7 +106,10 @@ workload is production-only, and the recovery identity can decrypt both by
 explicit policy.
 
 Creation rules are desired state for new encryption. Existing ciphertext keeps
-its current wrapped recipient metadata until it is synchronized.
+its current wrapped recipient metadata until it is synchronized. This distinction
+matters: reviewing a safer `.sops.yaml` does not revoke an old recipient until
+`updatekeys` rewrites the affected ciphertext metadata. The access audit compares
+the desired and actual public recipient sets and fails on drift.
 
 ## Applying a recipient change
 
@@ -109,6 +118,8 @@ After changing one environment's recipient list, update only that ciphertext:
 ```sh
 sops updatekeys -y --input-type dotenv env/enc/dev.env.enc
 sops updatekeys -y --input-type dotenv env/enc/prod.env.enc
+
+ores-sops-access-audit check --require-ciphertext
 ```
 
 The operator running `updatekeys` must already have a private identity capable
@@ -126,6 +137,9 @@ sops --rotate --in-place \
   --input-type dotenv \
   --output-type dotenv \
   env/enc/prod.env.enc
+
+# 3. Prove desired and actual recipient sets agree.
+ores-sops-access-audit check --require-ciphertext
 ```
 
 Then rotate the application credentials themselves whenever the removed person
@@ -142,7 +156,8 @@ those historical revisions, so repository history is not a revocation system.
 3. Add it to exactly the allowed environment rule or rules.
 4. Review the access-policy change under protected ownership.
 5. Run `sops updatekeys` only for the affected ciphertext files.
-6. Run `ores-sops-access-audit check` and the normal `ores-sops verify` gate.
+6. Run `ores-sops-access-audit check --require-ciphertext` and the normal
+   `ores-sops verify` gate.
 7. Test decryptability in a trusted environment without printing values.
 
 ## Offboarding
@@ -150,7 +165,8 @@ those historical revisions, so repository history is not a revocation system.
 1. Remove the public recipient from each environment the person must no longer
    access.
 2. Run `sops updatekeys` for each affected current ciphertext.
-3. Prove the removed identity no longer decrypts the current files.
+3. Run the required-ciphertext access audit and prove the removed identity no
+   longer decrypts the current files.
 4. Rotate the SOPS data key when the access event warrants it.
 5. Rotate application credentials whenever historical knowledge matters.
 6. Remove GitHub, CI, cloud, shell, VPN, and secret-manager access separately;
@@ -201,6 +217,7 @@ versioned contract change that updates all of these together:
 - exact SOPS creation-rule verification;
 - status, refresh, lock, temp cleanup, and symlink handling;
 - Nix/Just examples and fleet audit;
+- desired-vs-actual recipient-metadata audit for stage;
 - access-matrix tests proving dev-only and stage-only identities cannot decrypt
   prod;
 - organization policy documentation and rollout compatibility.
