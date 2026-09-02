@@ -493,7 +493,7 @@ verify_ciphertext_file() {
           sops_*) ;;
           *)
             case "$value" in
-              ENC\[*) ;;
+              ''|ENC\[*) ;;
               *) fail "approved ciphertext contains an obvious plaintext assignment: $shown" ;;
             esac
             ;;
