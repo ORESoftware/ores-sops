@@ -1,0 +1,63 @@
+name: SOPS repository and Just boundary
+
+on:
+  pull_request:
+    paths:
+      - justfile
+      - .gitignore
+      - scripts/check-repository-boundary.sh
+      - tests/test-repository-boundary.sh
+      - .github/workflows/repository-boundary.yml
+      - result
+  push:
+    branches: [main]
+    paths:
+      - justfile
+      - .gitignore
+      - scripts/check-repository-boundary.sh
+      - tests/test-repository-boundary.sh
+      - .github/workflows/repository-boundary.yml
+      - result
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sops-repository-boundary-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - name: Check out exact candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          show-progress: false
+
+      - name: Validate repository boundary without secret access
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/check-repository-boundary.sh
+          bash tests/test-repository-boundary.sh
+
+      - name: Install pinned Nix environment
+        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
+        with:
+          flakehub: false
+
+      - name: Parse canonical Just recipes and shellcheck guards
+        shell: bash
+        run: |
+          set -euo pipefail
+          nix develop --command just --list >/dev/null
+          nix develop --command shellcheck --shell=bash \
+            scripts/check-repository-boundary.sh \
+            tests/test-repository-boundary.sh
