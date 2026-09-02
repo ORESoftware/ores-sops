@@ -8,7 +8,7 @@ fail() {
   exit 1
 }
 
-root="$(git rev-parse --show-toplevel 2>/dev/null)"
+root="$(git rev-parse --show-toplevel 2>/dev/null || true)"
 [ -n "$root" ] || fail "not inside a Git repository"
 cd "$root"
 
