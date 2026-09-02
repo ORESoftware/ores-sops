@@ -33,9 +33,6 @@ jobs:
           bash -n ores-sops
           bash -n scripts/access-audit.sh
           bash -n scripts/fleet-audit.sh
-          bash -n tests/stage-access-audit.bats
-          bash -n tests/stage-fleet-audit.bats
-          bash -n tests/stage-lifecycle.bats
           git diff --check
 
       - name: Remove one-time fix machinery
