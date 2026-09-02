@@ -7,6 +7,7 @@ set -euo pipefail
 VERSION="0.1.0"
 POLICY=".sops.yaml"
 MIN_RECIPIENTS=2
+REQUIRE_PROD_EXCLUSIVE=0
 
 fail() {
   printf 'ores-sops-access-audit: %s\n' "$*" >&2
@@ -19,13 +20,16 @@ ores-sops-access-audit — verify least-privilege age recipients without decrypt
 
 Usage:
   ores-sops-access-audit check [--policy PATH] [--min-recipients N]
+                                  [--require-prod-exclusive]
   ores-sops-access-audit show  [--policy PATH]
   ores-sops-access-audit --version
 
 `check` requires one exact dev rule and one exact prod rule, age recipient lists,
-at least one dev-only recipient, and at least one prod-only recipient. Shared
-recovery recipients are allowed. The default minimum is two recipients per
-environment so one lost identity is not permanent data loss.
+and at least one dev-only recipient so ordinary development access cannot unlock
+production. Production recipients may also have development access. Use
+`--require-prod-exclusive` when policy requires a distinct production-only
+identity. Shared recovery recipients are allowed. The default minimum is two
+recipients per environment so one lost identity is not permanent data loss.
 
 `show` emits the public recipient matrix as TSV. It never reads ciphertext or
 private identities. This release intentionally follows the current exact
@@ -177,9 +181,11 @@ cmd_check() {
   shared="$(count_shared "$DEV_RECIPIENTS" "$PROD_RECIPIENTS")"
 
   [ "$dev_only" -ge 1 ] \
-    || fail "dev has no environment-exclusive recipient; its access set is contained in prod"
-  [ "$prod_only" -ge 1 ] \
-    || fail "prod has no environment-exclusive recipient; its access set is contained in dev"
+    || fail "dev has no environment-exclusive recipient; every dev recipient can decrypt prod"
+  if [ "$REQUIRE_PROD_EXCLUSIVE" -eq 1 ]; then
+    [ "$prod_only" -ge 1 ] \
+      || fail "prod has no environment-exclusive recipient; --require-prod-exclusive was requested"
+  fi
 
   printf 'ores-sops-access-audit: passed (dev=%s, prod=%s, shared=%s, dev-only=%s, prod-only=%s)\n' \
     "$dev_count" "$prod_count" "$shared" "$dev_only" "$prod_only"
@@ -237,6 +243,11 @@ main() {
       --min-recipients=*)
         [ "$command" = "check" ] || fail "--min-recipients is valid only with check"
         MIN_RECIPIENTS="${1#--min-recipients=}"
+        shift
+        ;;
+      --require-prod-exclusive)
+        [ "$command" = "check" ] || fail "--require-prod-exclusive is valid only with check"
+        REQUIRE_PROD_EXCLUSIVE=1
         shift
         ;;
       -h|--help)
