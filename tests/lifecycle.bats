@@ -81,6 +81,33 @@ EOF_IGNORE
   sops_decrypt "$RECOVERY_KEY" env/enc/prod.env.enc
 }
 
+@test "access audit reads real SOPS metadata and catches unapplied recipient policy" {
+  run ores-sops-access-audit check --require-ciphertext
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"checked for 2 file(s)"* ]]
+  [[ "$output" != *"$DEV_OLD_RECIPIENT"* ]]
+  [[ "$output" != *"$PROD_RECIPIENT"* ]]
+
+  write_rules "      - $DEV_OLD_RECIPIENT
+      - $DEV_NEW_RECIPIENT
+      - $RECOVERY_RECIPIENT"
+
+  run ores-sops-access-audit check --require-ciphertext
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"dev ciphertext recipients differ from .sops.yaml"* ]]
+  [[ "$output" == *"sops updatekeys"* ]]
+  [[ "$output" != *"$DEV_OLD_RECIPIENT"* ]]
+  [[ "$output" != *"$DEV_NEW_RECIPIENT"* ]]
+
+  SOPS_AGE_KEY_FILE="$DEV_OLD_KEY" \
+    sops updatekeys -y --input-type dotenv env/enc/dev.env.enc >/dev/null 2>&1
+
+  run ores-sops-access-audit check --require-ciphertext
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"dev=3, prod=2"* ]]
+  [[ "$output" == *"checked for 2 file(s)"* ]]
+}
+
 @test "adding a dev recipient with updatekeys grants new access without changing prod access" {
   write_rules "      - $DEV_OLD_RECIPIENT
       - $DEV_NEW_RECIPIENT

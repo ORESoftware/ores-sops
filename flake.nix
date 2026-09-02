@@ -39,6 +39,18 @@
           ];
           text = builtins.readFile ./scripts/fleet-audit.sh;
         };
+
+        ores-sops-access-audit = final.writeShellApplication {
+          name = "ores-sops-access-audit";
+          # This audit reads only .sops.yaml and compares public age recipient
+          # sets. It never opens ciphertext or private identity files.
+          runtimeInputs = with final; [
+            coreutils
+            gnugrep
+            gnused
+          ];
+          text = builtins.readFile ./scripts/access-audit.sh;
+        };
       };
     in
     {
@@ -98,6 +110,7 @@
       in {
         packages.ores-sops = pkgs.ores-sops;
         packages.ores-sops-fleet-audit = pkgs.ores-sops-fleet-audit;
+        packages.ores-sops-access-audit = pkgs.ores-sops-access-audit;
         packages.default = pkgs.ores-sops;
 
         apps.default = { type = "app"; program = "${pkgs.ores-sops}/bin/ores-sops"; };
@@ -105,9 +118,23 @@
           type = "app";
           program = "${pkgs.ores-sops-fleet-audit}/bin/ores-sops-fleet-audit";
         };
+        apps.access-audit = {
+          type = "app";
+          program = "${pkgs.ores-sops-access-audit}/bin/ores-sops-access-audit";
+        };
 
         devShells.default = pkgs.mkShell {
-          packages = with pkgs; [ ores-sops ores-sops-fleet-audit sops age git just shellcheck bats ];
+          packages = with pkgs; [
+            ores-sops
+            ores-sops-fleet-audit
+            ores-sops-access-audit
+            sops
+            age
+            git
+            just
+            shellcheck
+            bats
+          ];
         };
 
         # The container entrypoint is shipped as an example people copy, so it
@@ -122,6 +149,7 @@
           { nativeBuildInputs = [ pkgs.shellcheck ]; } ''
           shellcheck --shell=bash ${./ores-sops}
           shellcheck --shell=bash ${./scripts/fleet-audit.sh}
+          shellcheck --shell=bash ${./scripts/access-audit.sh}
           touch "$out"
         '';
 
@@ -151,6 +179,7 @@
             nativeBuildInputs = with pkgs; [
               ores-sops
               ores-sops-fleet-audit
+              ores-sops-access-audit
               sops
               age
               git
