@@ -10,7 +10,7 @@
 set -euo pipefail
 
 usage() {
-  cat <<'EOF'
+  cat <<'EOF_USAGE'
 Usage: ores-sops-fleet-audit [--strict] [--provider-inventory] [--consumer-bypass] [repo-path ...]
 
 Emit one TSV row per local Git repository with only non-secret conformance data.
@@ -21,11 +21,16 @@ Statuses:
   not-adopted   no SOPS dotenv adoption signal detected
   partial       some adoption signal exists but the contract is incomplete
   conflicting   tracked plaintext, unexpected env/enc path, symlink policy path,
-                or broad/noncanonical env/enc SOPS rule was detected
+                stage ciphertext without an exact stage rule, or broad/noncanonical
+                env/enc SOPS rule was detected
+
+The v0.4 contract requires exact dev/prod rules and permits one optional exact
+stage rule. A tracked stage ciphertext is canonical only when that rule exists.
 
 --provider-inventory adds tracked_env_dec, sendgrid_envs, and twilio_envs columns.
-Provider states are none, dev, prod, or dev+prod. The scanner parses only the
-variable name before '=' from tracked env/enc blobs and never prints values.
+Provider states are plus-joined configured environments such as none, dev,
+stage, prod, dev+stage, stage+prod, or dev+stage+prod. The scanner parses only
+the variable name before '=' from tracked env/enc blobs and never prints values.
 
 --consumer-bypass adds unguarded_mkdir and dockerignore columns. unguarded_mkdir
 counts tracked Just/shell lines that mkdir/chmod env/dec (including Just-variable
@@ -34,7 +39,7 @@ never printed. dockerignore is ok, partial, missing, untracked, or invalid.
 
 --strict exits non-zero unless every repository is adopted. Without --strict,
 findings are reported but do not stop a fleet scan.
-EOF
+EOF_USAGE
 }
 
 is_plaintext_env_path() {
@@ -53,20 +58,17 @@ tracked_mode() {
   git ls-files -s -- "$1" | awk 'NR == 1 { print $1 }'
 }
 
+stage_rule_present() {
+  local file="${1:-.sops.yaml}"
+  [ -f "$file" ] && [ ! -L "$file" ] &&
+    grep -Fq 'path_regex: ^env/enc/stage\.env\.enc$' "$file"
+}
+
 sops_rule_state() {
   local file="$1"
-  if [ ! -e "$file" ]; then
-    printf 'missing\n'
-    return
-  fi
-  if ! is_tracked "$file"; then
-    printf 'untracked\n'
-    return
-  fi
-  if [ -L "$file" ] || [ ! -f "$file" ]; then
-    printf 'invalid\n'
-    return
-  fi
+  if [ ! -e "$file" ]; then printf 'missing\n'; return; fi
+  if ! is_tracked "$file"; then printf 'untracked\n'; return; fi
+  if [ -L "$file" ] || [ ! -f "$file" ]; then printf 'invalid\n'; return; fi
 
   awk '
     {
@@ -74,12 +76,13 @@ sops_rule_state() {
       sub(/^[[:space:]]*-[[:space:]]*/, "", line)
       sub(/^[[:space:]]*/, "", line)
     }
-    line == "path_regex: ^env/enc/dev\\.env\\.enc$" { dev = 1; next }
-    line == "path_regex: ^env/enc/prod\\.env\\.enc$" { prod = 1; next }
+    line == "path_regex: ^env/enc/dev\\.env\\.enc$" { dev++; next }
+    line == "path_regex: ^env/enc/stage\\.env\\.enc$" { stage++; next }
+    line == "path_regex: ^env/enc/prod\\.env\\.enc$" { prod++; next }
     line ~ /^path_regex:/ && line ~ /env\/enc/ { broad = 1 }
     END {
-      if (broad) print "broad"
-      else if (dev && prod) print "exact"
+      if (broad || dev > 1 || stage > 1 || prod > 1) print "broad"
+      else if (dev == 1 && prod == 1) print "exact"
       else print "missing"
     }
   ' "$file"
@@ -95,8 +98,14 @@ ignore_contract_state() {
   git check-ignore --no-index -q sample.env || { printf 'missing\n'; return; }
   git check-ignore --no-index -q sample.env.local || { printf 'missing\n'; return; }
   git check-ignore --no-index -q env/dec/dev.env || { printf 'missing\n'; return; }
+  git check-ignore --no-index -q env/dec/prod.env || { printf 'missing\n'; return; }
   if git check-ignore --no-index -q env/enc/dev.env.enc; then printf 'missing\n'; return; fi
   if git check-ignore --no-index -q env/enc/prod.env.enc; then printf 'missing\n'; return; fi
+
+  if stage_rule_present .sops.yaml; then
+    git check-ignore --no-index -q env/dec/stage.env || { printf 'missing\n'; return; }
+    if git check-ignore --no-index -q env/enc/stage.env.enc; then printf 'missing\n'; return; fi
+  fi
   printf 'ok\n'
 }
 
@@ -113,16 +122,11 @@ unguarded_mkdir_count() {
   while IFS= read -r -d '' f; do
     case "$f" in
       justfile|Justfile|*.just|.just/*)
-        # Just recipes often mkdir via a Just variable ($path / $dec bound to env/dec)
-        # after checking only that leaf. Count those as the same bypass class.
-        # The regex must match a literal "$path" / "$dec" in the file, not expand them.
         # shellcheck disable=SC2016
         n="$(git show ":$f" 2>/dev/null | grep -cE 'mkdir[[:space:]]+-p[[:space:]]+.*env/dec|mkdir[[:space:]]+-p[[:space:]]+"\$path"|mkdir[[:space:]]+-p[[:space:]]+"\$dec"|install[[:space:]]+-d[[:space:]]+(-m[[:space:]]+7?00[[:space:]]+)?env/dec|chmod[[:space:]]+7?00[[:space:]]+(env/dec|"\$path"|"\$dec")' || true)"
         count=$((count + n))
         ;;
       scripts/*.sh)
-        # Count shell commands only. Policy scripts that mention the forbidden
-        # mkdir string in a Python check must not inflate the bypass tally.
         n="$(git show ":$f" 2>/dev/null | grep -cE '^[[:space:]]*mkdir[[:space:]]+-p[[:space:]].*env/dec|^[[:space:]]*chmod[[:space:]]+700[[:space:]]+env/dec' || true)"
         count=$((count + n))
         ;;
@@ -133,18 +137,9 @@ unguarded_mkdir_count() {
 
 dockerignore_state() {
   local file=".dockerignore"
-  if [ ! -e "$file" ]; then
-    printf 'missing\n'
-    return
-  fi
-  if ! is_tracked "$file"; then
-    printf 'untracked\n'
-    return
-  fi
-  if [ -L "$file" ] || [ ! -f "$file" ]; then
-    printf 'invalid\n'
-    return
-  fi
+  if [ ! -e "$file" ]; then printf 'missing\n'; return; fi
+  if ! is_tracked "$file"; then printf 'untracked\n'; return; fi
+  if [ -L "$file" ] || [ ! -f "$file" ]; then printf 'invalid\n'; return; fi
   if grep -Fq 'env/dec' "$file" && grep -Fq 'env/enc' "$file"; then
     printf 'ok\n'
   else
@@ -153,39 +148,28 @@ dockerignore_state() {
 }
 
 provider_env_state() {
-  local pattern="$1"
-  local environment file
-  local states=()
-
-  for environment in dev prod; do
+  local pattern="$1" environment file joined=""
+  for environment in dev stage prod; do
     file="env/enc/${environment}.env.enc"
     if ! is_tracked "$file" || [ "$(tracked_mode "$file")" = 120000 ]; then
       continue
     fi
-
     if git show ":$file" 2>/dev/null | awk -F= -v pattern="$pattern" '
       /^[A-Za-z_][A-Za-z0-9_]*=/ {
-        if ($1 ~ pattern) {
-          found = 1
-        }
+        if ($1 ~ pattern) found = 1
       }
       END { exit(found ? 0 : 1) }
     '; then
-      states+=("$environment")
+      joined="${joined:+$joined+}$environment"
     fi
   done
-
-  case "${#states[@]}" in
-    0) printf 'none\n' ;;
-    1) printf '%s\n' "${states[0]}" ;;
-    2) printf '%s+%s\n' "${states[0]}" "${states[1]}" ;;
-  esac
+  printf '%s\n' "${joined:-none}"
 }
 
 audit_one() {
   local requested="$1" root label
   local plaintext=0 unexpected=0 symlinks=0 env_enc_count=0 signals=0
-  local tracked_env_dec=0 unguarded_mkdir=0
+  local tracked_env_dec=0 unguarded_mkdir=0 stage_enabled=0
   local f mode rules ignore attrs status sendgrid_envs twilio_envs dockerignore
   local extra=()
 
@@ -197,12 +181,18 @@ audit_one() {
 
   (
     cd "$root"
+    stage_rule_present .sops.yaml && stage_enabled=1
 
     while IFS= read -r -d '' f; do
       mode="$(tracked_mode "$f")"
       case "$f" in
         env/enc/dev.env.enc|env/enc/prod.env.enc)
           env_enc_count=$((env_enc_count + 1))
+          [ "$mode" != 120000 ] || symlinks=$((symlinks + 1))
+          ;;
+        env/enc/stage.env.enc)
+          env_enc_count=$((env_enc_count + 1))
+          [ "$stage_enabled" -eq 1 ] || unexpected=$((unexpected + 1))
           [ "$mode" != 120000 ] || symlinks=$((symlinks + 1))
           ;;
         env/enc/*)
@@ -219,9 +209,7 @@ audit_one() {
           [ "$mode" != 120000 ] || symlinks=$((symlinks + 1))
           ;;
         *)
-          if is_plaintext_env_path "$f"; then
-            plaintext=$((plaintext + 1))
-          fi
+          if is_plaintext_env_path "$f"; then plaintext=$((plaintext + 1)); fi
           ;;
       esac
     done < <(git ls-files -z)
@@ -261,9 +249,7 @@ audit_one() {
 
     printf '%s\t%s\t%d\t%d\t%d\t%s\t%s\t%s' \
       "$label" "$status" "$plaintext" "$unexpected" "$symlinks" "$rules" "$ignore" "$attrs"
-    if [ "${#extra[@]}" -gt 0 ]; then
-      printf '\t%s' "${extra[@]}"
-    fi
+    if [ "${#extra[@]}" -gt 0 ]; then printf '\t%s' "${extra[@]}"; fi
     printf '\n'
 
     case "$status" in
@@ -309,7 +295,5 @@ for repo in "${repos[@]}"; do
   if [ "$rc" -gt "$worst" ]; then worst="$rc"; fi
 done
 
-if [ "$strict" -eq 1 ]; then
-  exit "$worst"
-fi
+if [ "$strict" -eq 1 ]; then exit "$worst"; fi
 exit 0

@@ -2,95 +2,85 @@
 
 ## Decision
 
-An age public recipient must **not** automatically appear on every encrypted
-environment file. Access is granted per ciphertext file by listing only the
-approved recipients on that file's exact SOPS creation rule.
+Access is granted per ciphertext file. An age public recipient must not
+implicitly appear on every environment.
 
-The current `ores-sops` contract has two tracked secret-bearing files:
+The v0.4 application-dotenv contract is:
 
 ```text
 env/enc/dev.env.enc
+env/enc/stage.env.enc   # optional exact environment
 env/enc/prod.env.enc
 ```
 
-They must use a least-privilege recipient matrix before production reliance. A
-shared, independently controlled recovery recipient is allowed. The required
-property is that at least one ordinary development recipient is omitted from
-prod; otherwise every developer who can decrypt dev can also decrypt prod.
+The corresponding plaintext paths are local-only:
 
-Production-authorized developers may deliberately be listed on both files, so a
-prod recipient set contained within dev is valid. Repositories that require a
-separate hardware or workload identity used only for production can enable the
-stricter production-exclusive check:
-
-```sh
-# Production/CI gate: require both ciphertext files and exact recipient sync.
-nix run github:ORESoftware/ores-sops#access-audit -- \
-  check --require-ciphertext
-
-# Optional stricter policy: require a production-only recipient too.
-nix run github:ORESoftware/ores-sops#access-audit -- \
-  check --require-ciphertext --require-prod-exclusive
-
-# Bootstrap only, before ciphertext exists:
-ores-sops-access-audit check --policy-only
+```text
+env/dec/dev.env
+env/dec/stage.env
+env/dec/prod.env
 ```
 
-The audit never decrypts. It reads `.sops.yaml` plus only the public
-`sops_age__list_*__map_recipient` metadata lines from existing ciphertext. It
-does not read private identity files, decrypted values, application assignments,
-or encrypted values. Normal `check` output reports counts only.
+A developer who is approved only for dev may clone the repository and see the
+three encrypted blobs, but their private age identity must decrypt only
+`dev.env.enc`. It must fail on stage and prod. A successful decrypt is the only
+path by which `ores-sops` writes the corresponding file under `env/dec/`.
 
-## How the cryptographic boundary works
+## Cryptographic boundary
 
-Each encrypted SOPS file has its own random data-encryption key. SOPS wraps that
-file key separately for every configured master key or age recipient and stores
-the wrapped copies in the file metadata.
+Each SOPS ciphertext has its own random data-encryption key. That file key is
+wrapped separately for the public age recipients configured on the exact
+creation rule. A normal `age:` list is one-of-many:
 
-For a normal `age:` recipient list, access is **OR**:
+- Alice can decrypt a file when Alice's matching public recipient is listed;
+- cloning ciphertext does not grant decryption;
+- being listed on dev does not grant stage or prod;
+- a recipient listed on multiple files can decrypt each of those files;
+- a shared recovery identity can decrypt all three only because it is listed on
+  all three deliberately.
 
-- Alice's private age identity can decrypt a file if Alice's public recipient is
-  listed for that file.
-- Bob cannot decrypt that file merely because Bob can clone the repository or
-  because Bob is listed on another environment's rule.
-- A recipient listed on both dev and prod can decrypt both. This should be
-  deliberate, normally for a tightly controlled recovery identity, a privileged
-  developer, or an explicitly authorized production operator.
+Public `age1...` recipients are safe to commit and review. Private
+`AGE-SECRET-KEY-...` identities must stay on the human device, hardware token,
+protected workload, KMS integration, or secret manager. They must never enter
+Git, issues, pull requests, Linear, logs, caches, artifacts, screenshots, or
+fixtures.
 
-The public recipient is safe to commit. The corresponding private identity must
-stay on the developer device, hardware token, secret manager, or protected
-workload and must never enter Git, issues, pull requests, CI logs, artifacts, or
-chat.
+## Recommended matrix
 
-## Recommended human and workload matrix
+| Identity class | dev | stage | prod | Notes |
+| --- | ---: | ---: | ---: | --- |
+| ordinary developer | yes | no | no | Individual human identity |
+| release engineer | yes | yes | no | Can test releases but cannot decrypt prod |
+| production-authorized engineer | yes | yes | yes | Explicitly privileged on each file |
+| dev CI | yes | no | no | Never expose to fork-originated PRs |
+| stage deploy workload | no | yes | no | Separate protected workload identity |
+| prod deploy workload | no | no | yes | Prefer OIDC-backed KMS/workload identity |
+| break-glass recovery | yes | yes | yes | Offline, independent, and regularly tested |
 
-| Identity class | dev | prod | Notes |
-| --- | ---: | ---: | --- |
-| ordinary developer | yes | no | Individual human age identity |
-| production-authorized developer | yes | yes | Same identity may be mapped to both files |
-| production-only operator | optional | yes | Prefer a separate hardware-backed identity |
-| dev CI workload | yes | no | Never expose to fork-originated pull requests |
-| prod deploy workload | no | yes | Prefer OIDC-backed KMS/workload identity where practical |
-| break-glass recovery | yes | yes | Offline and independently controlled; test recovery |
+The baseline three-environment audit requires at least one **true dev-only**
+recipient—absent from both stage and prod. `--require-stage-exclusive` requires
+at least one stage recipient omitted from prod. `--require-prod-exclusive`
+requires a true production-only recipient omitted from dev and stage.
 
-A person can use one age keypair across multiple allowed files because the
-recipient-to-file mapping still enforces the boundary. Separate production
-hardware identities reduce blast radius further and are preferred for elevated
-access, but they are not required for the common “some developers also operate
-production” hierarchy.
+Production-authorized people may still be listed on all three. The strict checks
+prove that less-privileged identities also exist and remain bounded.
 
-## Canonical `.sops.yaml` pattern
+## Canonical policy
 
-Replace every placeholder with a real **public** age recipient. Do not put
-private identities here.
+Replace placeholders with real public recipients:
 
 ```yaml
 creation_rules:
   - path_regex: ^env/enc/dev\.env\.enc$
     age:
-      - age1_DEV_ALICE_REPLACE_WITH_REAL_PUBLIC_RECIPIENT
-      - age1_DEV_BOB_REPLACE_WITH_REAL_PUBLIC_RECIPIENT
-      - age1_PROD_OPERATOR_REPLACE_WITH_REAL_PUBLIC_RECIPIENT
+      - age1_DEV_DEVELOPER_REPLACE_WITH_REAL_PUBLIC_RECIPIENT
+      - age1_DEV_CI_REPLACE_WITH_REAL_PUBLIC_RECIPIENT
+      - age1_RECOVERY_REPLACE_WITH_REAL_PUBLIC_RECIPIENT
+
+  - path_regex: ^env/enc/stage\.env\.enc$
+    age:
+      - age1_RELEASE_ENGINEER_REPLACE_WITH_REAL_PUBLIC_RECIPIENT
+      - age1_STAGE_DEPLOY_REPLACE_WITH_REAL_PUBLIC_RECIPIENT
       - age1_RECOVERY_REPLACE_WITH_REAL_PUBLIC_RECIPIENT
 
   - path_regex: ^env/enc/prod\.env\.enc$
@@ -100,128 +90,180 @@ creation_rules:
       - age1_RECOVERY_REPLACE_WITH_REAL_PUBLIC_RECIPIENT
 ```
 
-This gives Alice and Bob development access without production access. The
-production operator is deliberately listed on both files. The production deploy
-workload is production-only, and the recovery identity can decrypt both by
-explicit policy.
+Do not use `staging`, `qa`, wildcard `env/enc` rules, or arbitrary environment
+names. Existing dev/prod repositories remain valid when no stage rule or stage
+material exists.
 
-Creation rules are desired state for new encryption. Existing ciphertext keeps
-its current wrapped recipient metadata until it is synchronized. This distinction
-matters: reviewing a safer `.sops.yaml` does not revoke an old recipient until
-`updatekeys` rewrites the affected ciphertext metadata. The access audit compares
-the desired and actual public recipient sets and fails on drift.
-
-## Applying a recipient change
-
-After changing one environment's recipient list, update only that ciphertext:
+## Bootstrap with scoped recipients
 
 ```sh
-sops updatekeys -y --input-type dotenv env/enc/dev.env.enc
-sops updatekeys -y --input-type dotenv env/enc/prod.env.enc
-
-ores-sops-access-audit check --require-ciphertext
+ores-sops init \
+  --with-stage \
+  --stage-recipient age1_STAGE_PUBLIC_RECIPIENT \
+  --prod-recipient age1_PROD_PUBLIC_RECIPIENT \
+  --recovery-recipient age1_RECOVERY_PUBLIC_RECIPIENT
 ```
 
-The operator running `updatekeys` must already have a private identity capable
-of decrypting the current file key. The operation re-wraps that file key for the
-new recipient set; it does not reveal application values in normal output.
+When a scoped option is used, the local identity starts as dev-only. It is added
+to stage or prod only when its public recipient is supplied for that environment
+explicitly.
 
-For a removal caused by compromise or where a fresh file key is required:
+Available options:
+
+```text
+--recipient K           common/legacy recipient on every configured environment
+--dev-recipient K       dev only
+--stage-recipient K     stage only and enables stage
+--prod-recipient K      prod only
+--recovery-recipient K  all configured environments
+```
+
+Legacy `ores-sops init` remains a compatibility bootstrap and initially uses the
+local recipient on dev/prod. That is not an acceptable final production matrix.
+
+## Required gate
+
+For a three-environment repository:
 
 ```sh
-# 1. Remove the public recipient from the exact .sops.yaml rule.
-sops updatekeys -y --input-type dotenv env/enc/prod.env.enc
+ores-sops verify
 
-# 2. Generate a new per-file data key and re-encrypt the values.
-sops --rotate --in-place \
-  --input-type dotenv \
-  --output-type dotenv \
-  env/enc/prod.env.enc
-
-# 3. Prove desired and actual recipient sets agree.
-ores-sops-access-audit check --require-ciphertext
+ores-sops-access-audit check \
+  --require-stage \
+  --require-stage-exclusive \
+  --require-ciphertext
 ```
 
-Then rotate the application credentials themselves whenever the removed person
-or identity may have seen or used them. Rekeying SOPS prevents access to future
-ciphertext revisions; it cannot make previously learned credentials unknown.
-Old Git commits also remain decryptable to identities that were authorized for
-those historical revisions, so repository history is not a revocation system.
+When a production-only identity is policy:
+
+```sh
+ores-sops-access-audit check \
+  --require-stage \
+  --require-stage-exclusive \
+  --require-prod-exclusive \
+  --require-ciphertext
+```
+
+Before ciphertext exists, use the explicit bootstrap-only mode:
+
+```sh
+ores-sops-access-audit check \
+  --require-stage \
+  --require-stage-exclusive \
+  --policy-only
+```
+
+The audit does not decrypt. It reads `.sops.yaml` and only public
+`sops_age__list_*__map_recipient` metadata from existing ciphertext. Normal
+output reports counts, not recipient strings. `show` is the explicit public
+recipient inventory command.
+
+## Desired policy versus actual access
+
+Creation rules are desired state. Existing ciphertext retains its current
+wrapped-recipient metadata until the file is updated. Removing Alice from
+`.sops.yaml` alone does not revoke Alice from the current ciphertext.
+
+Synchronize only the changed environment:
+
+```sh
+ores-sops sync-keys stage
+```
+
+Equivalent direct command:
+
+```sh
+sops updatekeys -y --input-type dotenv env/enc/stage.env.enc
+```
+
+The access audit compares desired and actual public recipient sets and fails on
+drift. Tests also hash the unaffected environment ciphertexts to prove a stage
+recipient change does not rewrite dev or prod.
 
 ## Onboarding
 
-1. The developer generates an individual age identity locally or obtains an
-   approved hardware-backed identity.
-2. Only the public `age1...` recipient is supplied to the repository owner.
-3. Add it to exactly the allowed environment rule or rules.
-4. Review the access-policy change under protected ownership.
-5. Run `sops updatekeys` only for the affected ciphertext files.
-6. Run `ores-sops-access-audit check --require-ciphertext` and the normal
-   `ores-sops verify` gate.
-7. Test decryptability in a trusted environment without printing values.
+1. Generate an individual age identity locally or issue an approved
+   hardware-backed identity.
+2. Send only the public `age1...` recipient to the policy owner.
+3. Add it to exactly the approved environment rules.
+4. Review `.sops.yaml` as an access-control change.
+5. Run `ores-sops sync-keys` only for affected ciphertexts.
+6. Run the required access audit and normal verification.
+7. In a trusted test, prove positive access and expected negative access without
+   printing any values.
 
-## Offboarding
+For a dev-only person, the acceptance test is:
 
-1. Remove the public recipient from each environment the person must no longer
-   access.
-2. Run `sops updatekeys` for each affected current ciphertext.
-3. Run the required-ciphertext access audit and prove the removed identity no
-   longer decrypts the current files.
-4. Rotate the SOPS data key when the access event warrants it.
-5. Rotate application credentials whenever historical knowledge matters.
-6. Remove GitHub, CI, cloud, shell, VPN, and secret-manager access separately;
-   SOPS controls only the ciphertext decryption boundary.
+```text
+dev decrypt:   success
+stage decrypt: failure
+prod decrypt:  failure
+```
 
-## Stronger production approval with key groups
+## Offboarding and compromise
 
-A plain `age:` list is one-of-many access. When production policy requires two
-independent trust domains, SOPS key groups can split the file key with a Shamir
-threshold. For example, requiring one approved human group **and** one cloud KMS
-or protected workload group uses two groups with a threshold of two.
+1. Remove the public recipient from each affected rule.
+2. Run `ores-sops sync-keys` for each affected current ciphertext.
+3. Prove the removed identity cannot decrypt the current files.
+4. When warranted, rotate the per-file SOPS data key:
 
-That is a different policy from simple environment separation. It should be
-reviewed and tested separately because an unavailable group can make production
-recovery impossible. The `ores-sops-access-audit` command intentionally fails
-closed on `key_groups` rather than pretending an age-list audit proves a
-threshold policy.
+   ```sh
+   sops --rotate --in-place \
+     --input-type dotenv \
+     --output-type dotenv \
+     env/enc/prod.env.enc
+   ```
 
-## Nix, Just, GitHub, and sops-nix responsibilities
+5. Rotate database passwords, API tokens, signing keys, and other application
+   credentials whenever the removed identity may have learned them.
+6. Remove GitHub, cloud, VPN, CI, shell, and secret-manager permissions
+   separately.
 
-- **SOPS + age** decides who can cryptographically decrypt each tracked file.
-- **Nix** pins the `sops`, `age`, audit, and helper versions so behavior is
-  reproducible. It does not grant decryption access.
-- **Just** provides reviewed command recipes. It does not grant access either;
-  an unauthorized identity still cannot decrypt.
-- **GitHub repository permissions** decide who can read or modify Git data.
-  Cloning ciphertext is not decryption authorization.
-- **CODEOWNERS and branch protection** should protect `.sops.yaml`, production
-  ciphertext, and trusted deployment workflows from unauthorized policy
-  changes.
-- **sops-nix owner/group/mode settings** control which processes or users can
-  read a plaintext file after a host decrypts it. That runtime ACL is separate
-  from the SOPS recipient ACL stored with repository ciphertext.
+SOPS rekeying controls future/current ciphertext access. It cannot erase
+plaintext already learned, and historical Git revisions may remain decryptable
+to identities authorized at the time.
 
-## Stage environment status
+## Runtime plaintext boundary
 
-The same model works for an exact third rule such as
-`env/enc/stage.env.enc`: stage-only recipients are listed on that rule and are
-omitted from prod. However, `ores-sops` v0.3.x intentionally enforces exactly
-`dev` and `prod`; it rejects arbitrary or staging paths so a repository cannot
-silently weaken the fleet contract.
+`env/dec/` is ignored, mode `0700`, and runtime-only. Completed files use mode
+`0600`. Decryption occurs into an owner-only temporary file and is atomically
+renamed only after SOPS and dotenv validation succeed. A failed stage or prod
+decrypt therefore does not create a partial plaintext file and does not replace
+a prior complete one.
 
-Therefore, do not add `stage.env.enc` ad hoc. Stage support must land as a
-versioned contract change that updates all of these together:
+`ores-sops use stage` creates only `env/dec/stage.env` and then atomically points
+`.env` to that relative path. `ores-sops lock` removes all managed dev, stage,
+and prod plaintext plus stale managed temp state.
 
-- accepted environment names and safe `.env` targets;
-- exact Git allowlist and pre-commit checks;
-- exact SOPS creation-rule verification;
-- status, refresh, lock, temp cleanup, and symlink handling;
-- Nix/Just examples and fleet audit;
-- desired-vs-actual recipient-metadata audit for stage;
-- access-matrix tests proving dev-only and stage-only identities cannot decrypt
-  prod;
-- organization policy documentation and rollout compatibility.
+Filesystem modes protect plaintext after decryption but do not replace the SOPS
+recipient policy. On NixOS, `sops-nix` owner/group/mode settings are an
+additional runtime ACL for service processes.
 
-Until that coordinated change lands, use the existing dev/prod split as the
-enforced cryptographic boundary rather than inventing an unverified staging
-path.
+## CI identities
+
+Use separate protected workload identities for dev, stage, and prod. A dev CI
+identity must not decrypt stage/prod, and a stage deployment identity must not
+decrypt prod. Never make any decryption identity available to fork-originated
+pull requests.
+
+Keyless PR checks should run `ores-sops verify` and the access audit. Trusted,
+protected jobs may additionally verify decryptability and application startup,
+but must clean plaintext in an always-run finalizer and never cache or upload it.
+
+## Threshold policies
+
+A plain age list is OR access. When production requires two independent trust
+domains, SOPS `key_groups` plus a Shamir threshold can require, for example, one
+human-controlled group and one workload/KMS-controlled group.
+
+That is a separate policy class with different recovery risks. The age-list
+access audit fails closed on `key_groups` rather than claiming that a simple
+recipient-matrix check proves threshold behavior.
+
+## Governance
+
+Public recipient changes can grant decryption rights even though the recipient
+strings are not secrets. Protect `.sops.yaml`, stage/prod ciphertext, the access
+audit, and deployment workflows with CODEOWNERS plus an enforced branch
+ruleset. CODEOWNERS alone does not force review unless repository protection
+requires code-owner approval.

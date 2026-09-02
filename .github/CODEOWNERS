@@ -1,7 +1,12 @@
 # Access-policy changes can grant decryption rights even though public age
 # recipients are not secrets. Enforce these entries with branch protection.
 /.sops.yaml @ORESoftware
+/env/enc/stage.env.enc @ORESoftware
 /env/enc/prod.env.enc @ORESoftware
+/ores-sops @ORESoftware
 /.github/workflows/ @ORESoftware
 /scripts/access-audit.sh @ORESoftware
+/scripts/fleet-audit.sh @ORESoftware
+/tests/stage.bats @ORESoftware
+/tests/stage-fleet.bats @ORESoftware
 /docs/access-control.md @ORESoftware
