@@ -29,44 +29,51 @@ jobs:
 
           script = Path("ores-sops")
           before = script.read_text(encoding="utf-8")
-          old = '''            case "$value" in
-              ENC\\[*) ;;
-              *) fail "approved ciphertext contains an obvious plaintext assignment: $shown" ;;
-            esac'''
-          new = '''            case "$value" in
-              ''|ENC\\[*) ;;
-              *) fail "approved ciphertext contains an obvious plaintext assignment: $shown" ;;
-            esac'''
+          old = (
+              '            case "$value" in\n'
+              '              ENC\\[*) ;;\n'
+              '              *) fail "approved ciphertext contains an obvious plaintext assignment: $shown" ;;\n'
+              '            esac'
+          )
+          new = (
+              '            case "$value" in\n'
+              "              ''|ENC\\[*) ;;\n"
+              '              *) fail "approved ciphertext contains an obvious plaintext assignment: $shown" ;;\n'
+              '            esac'
+          )
           if before.count(old) != 1:
               raise SystemExit("expected exactly one plaintext-assignment verifier block")
           script.write_text(before.replace(old, new), encoding="utf-8")
 
           tests = Path("tests/ores-sops.bats")
           before = tests.read_text(encoding="utf-8")
-          anchor = '''@test "verify rejects obvious plaintext assignment disguised as ciphertext" {
-  printf 'SECRET=plaintext\\nsops_mac=ENC[fake]\\n' > env/enc/dev.env.enc
-  git add env/enc/dev.env.enc
-  run ores-sops verify
-  [ "$status" -ne 0 ]
-  [[ "$output" == *"obvious plaintext assignment"* ]]
-}
-'''
-          addition = anchor + '''
-@test "verify accepts an exact empty assignment because it contains no plaintext secret" {
-  printf 'OPTIONAL_PROVIDER_TOKEN=\\nsops_mac=ENC[fake]\\n' > env/enc/dev.env.enc
-  git add env/enc/dev.env.enc
-  run ores-sops verify
-  [ "$status" -eq 0 ]
-}
-
-@test "verify still rejects quoted placeholder values" {
-  printf 'OPTIONAL_PROVIDER_TOKEN=""\\nsops_mac=ENC[fake]\\n' > env/enc/dev.env.enc
-  git add env/enc/dev.env.enc
-  run ores-sops verify
-  [ "$status" -ne 0 ]
-  [[ "$output" == *"obvious plaintext assignment"* ]]
-}
-'''
+          anchor = "\n".join([
+              '@test "verify rejects obvious plaintext assignment disguised as ciphertext" {',
+              r"  printf 'SECRET=plaintext\nsops_mac=ENC[fake]\n' > env/enc/dev.env.enc",
+              '  git add env/enc/dev.env.enc',
+              '  run ores-sops verify',
+              '  [ "$status" -ne 0 ]',
+              '  [[ "$output" == *"obvious plaintext assignment"* ]]',
+              '}',
+              '',
+          ])
+          addition = anchor + "\n".join([
+              '@test "verify accepts an exact empty assignment because it contains no plaintext secret" {',
+              r"  printf 'OPTIONAL_PROVIDER_TOKEN=\nsops_mac=ENC[fake]\n' > env/enc/dev.env.enc",
+              '  git add env/enc/dev.env.enc',
+              '  run ores-sops verify',
+              '  [ "$status" -eq 0 ]',
+              '}',
+              '',
+              '@test "verify still rejects quoted placeholder values" {',
+              r'''  printf 'OPTIONAL_PROVIDER_TOKEN=""\nsops_mac=ENC[fake]\n' > env/enc/dev.env.enc''',
+              '  git add env/enc/dev.env.enc',
+              '  run ores-sops verify',
+              '  [ "$status" -ne 0 ]',
+              '  [[ "$output" == *"obvious plaintext assignment"* ]]',
+              '}',
+              '',
+          ])
           if before.count(anchor) != 1:
               raise SystemExit("expected exactly one plaintext-assignment regression anchor")
           tests.write_text(before.replace(anchor, addition), encoding="utf-8")
