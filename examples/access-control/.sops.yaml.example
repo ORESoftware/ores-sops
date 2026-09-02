@@ -1,10 +1,16 @@
-# Copy to .sops.yaml and replace every placeholder with a real PUBLIC age1...
-# recipient. Never place an AGE-SECRET-KEY identity in this file or in Git.
+# Copy to .sops.yaml and replace placeholders with real PUBLIC age1...
+# recipients. Never place an AGE-SECRET-KEY identity in this file or in Git.
 creation_rules:
   - path_regex: ^env/enc/dev\.env\.enc$
     age:
       - age1_DEV_DEVELOPER_REPLACE_WITH_REAL_PUBLIC_RECIPIENT
-      - age1_DEV_CI_REPLACE_WITH_REAL_PUBLIC_RECIPIENT
+      - age1_RELEASE_ENGINEER_REPLACE_WITH_REAL_PUBLIC_RECIPIENT
+      - age1_RECOVERY_REPLACE_WITH_REAL_PUBLIC_RECIPIENT
+
+  - path_regex: ^env/enc/stage\.env\.enc$
+    age:
+      - age1_RELEASE_ENGINEER_REPLACE_WITH_REAL_PUBLIC_RECIPIENT
+      - age1_STAGE_DEPLOY_REPLACE_WITH_REAL_PUBLIC_RECIPIENT
       - age1_RECOVERY_REPLACE_WITH_REAL_PUBLIC_RECIPIENT
 
   - path_regex: ^env/enc/prod\.env\.enc$

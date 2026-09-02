@@ -14,13 +14,13 @@ public-recipients:
 
 # Synchronize an existing ciphertext's wrapped file key with its exact rule.
 rekey environment:
-    case "{{environment}}" in dev|prod) ;; *) echo "expected dev or prod" >&2; exit 2 ;; esac
+    case "{{environment}}" in dev|stage|prod) ;; *) echo "expected dev, stage, or prod" >&2; exit 2 ;; esac
     sops updatekeys -y --input-type dotenv "env/enc/{{environment}}.env.enc"
     ores-sops-access-audit check --require-ciphertext
 
 # Use after a recipient removal when a fresh per-file data key is required.
 rotate-data-key environment:
-    case "{{environment}}" in dev|prod) ;; *) echo "expected dev or prod" >&2; exit 2 ;; esac
+    case "{{environment}}" in dev|stage|prod) ;; *) echo "expected dev, stage, or prod" >&2; exit 2 ;; esac
     sops --rotate --in-place --input-type dotenv --output-type dotenv "env/enc/{{environment}}.env.enc"
     ores-sops-access-audit check --require-ciphertext
 

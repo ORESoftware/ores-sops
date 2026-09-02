@@ -6,17 +6,18 @@ It is **not** replaced by [ores-otel](https://github.com/ores-otel). They are di
 
 | Layer | Repository | Job |
 | --- | --- | --- |
-| Secrets at rest in Git | `ORESoftware/ores-sops` | Exact `dev`/`prod` SOPS dotenv contract (`env/enc`, `env/dec`) |
+| Secrets at rest in Git | `ORESoftware/ores-sops` | Exact `dev`/optional `stage`/`prod` SOPS dotenv contract (`env/enc`, `env/dec`) |
 | Logs, traces, metrics | `ores-otel/*` | OpenTelemetry, application logging, and observability |
 
 ores-otel repositories *consume* this contract for encrypted env files (for example [`ores-otel/ores.otel.log/env`](https://github.com/ores-otel/ores.otel.log/blob/main/env/README.md)). Auth stays in [shared-auth](https://github.com/shared-auth); package management stays in [zed-pkg](https://github.com/zed-pkg). See [`docs/scope.md`](docs/scope.md).
 
 ## Contract
 
-Exactly two secret-bearing ciphertext files are allowed in version control:
+Two ciphertext files are required and one exact stage ciphertext is optional:
 
 ```text
 env/enc/dev.env.enc
+env/enc/stage.env.enc   # optional
 env/enc/prod.env.enc
 ```
 
@@ -24,8 +25,9 @@ Plaintext is local-only:
 
 ```text
 env/dec/dev.env
+env/dec/stage.env       # optional
 env/dec/prod.env
-.env -> env/dec/dev.env   # or prod
+.env -> env/dec/dev.env   # or stage or prod
 ```
 
 The `env/dec/` directory itself is runtime-only: it is not represented by a
@@ -35,7 +37,7 @@ Callers must not `mkdir`/`chmod` `env/dec` before delegating to the helper.
 
 The root `.env` is a **relative managed symlink**, never a copied plaintext file. `ores-sops` refuses to overwrite or delete an unmanaged `.env` file or an unmanaged `.env` symlink.
 
-Because the tracked files end in `.enc`, SOPS cannot infer the dotenv store from the filename. Every operation therefore uses explicit `--input-type dotenv --output-type dotenv`; encryption also uses `--filename-override env/enc/<dev|prod>.env.enc` so exact `.sops.yaml` creation rules are selected deterministically. Data-key rotation keeps the same explicit input/output typing so the rotated `.env.enc` remains dotenv-serialized.
+Because the tracked files end in `.enc`, SOPS cannot infer the dotenv store from the filename. Every operation therefore uses explicit `--input-type dotenv --output-type dotenv`; encryption also uses `--filename-override env/enc/<dev|stage|prod>.env.enc` so exact `.sops.yaml` creation rules are selected deterministically. Data-key rotation keeps the same explicit input/output typing so the rotated `.env.enc` remains dotenv-serialized.
 
 ## Required ignore policy
 
@@ -53,9 +55,10 @@ Because the tracked files end in `.enc`, SOPS cannot infer the dotenv store from
 # Decrypted material is never tracked.
 /env/dec/
 
-# Only the two approved ciphertext files are trackable.
+# Only approved exact ciphertext files are trackable.
 /env/enc/*
 !/env/enc/dev.env.enc
+!/env/enc/stage.env.enc
 !/env/enc/prod.env.enc
 ```
 
@@ -89,10 +92,11 @@ Prefer `ores-sops edit dev` or `ores-sops edit prod` for normal secret changes b
 
 ```text
 ores-sops init
-ores-sops use dev|prod [--force]
-ores-sops encrypt dev|prod [--allow-empty]
-ores-sops edit dev|prod
-ores-sops diff dev|prod
+ores-sops use dev|stage|prod [--force]
+ores-sops encrypt dev|stage|prod [--allow-empty]
+ores-sops sync-keys dev|stage|prod
+ores-sops edit dev|stage|prod
+ores-sops diff dev|stage|prod
 ores-sops status
 ores-sops refresh
 ores-sops verify
@@ -104,11 +108,11 @@ ores-sops ensure-dec
 
 `diff` is deliberately non-secret: it reports only variable names prefixed with `+` (added), `-` (removed), or `~` (value changed). It hashes values internally for comparison and never prints them.
 
-Arbitrary environment names are rejected. This is intentional: the tracked VCS contract is exactly `dev` and `prod`.
+Arbitrary environment names are rejected. The tracked VCS contract is exactly required `dev`/`prod` plus one optional exact `stage` environment.
 
 ## Atomic activation and failure behavior
 
-Every managed command first creates the ignored `env/dec/` directory if it is absent, rejects symlink/non-directory forms, and applies mode `0700`. `use` then decrypts into an owner-only temporary file under `env/dec/`, validates successful SOPS completion and dotenv syntax/duplicate keys, applies mode `0600`, and only then atomically renames it into `env/dec/dev.env` or `env/dec/prod.env`.
+Every managed command first creates the ignored `env/dec/` directory if it is absent, rejects symlink/non-directory forms, and applies mode `0700`. `use` then decrypts into an owner-only temporary file under `env/dec/`, validates successful SOPS completion and dotenv syntax/duplicate keys, applies mode `0600`, and only then atomically renames it into `env/dec/dev.env`, optional `env/dec/stage.env`, or `env/dec/prod.env`.
 
 A failed decrypt therefore leaves the previous complete plaintext untouched. After a successful decrypt, the root symlink is replaced atomically with a relative link.
 
@@ -118,12 +122,12 @@ Managed env paths, ciphertext/plaintext files, policy files, and Git hook files/
 
 ## SOPS policy
 
-`init` creates separate exact creation rules for dev and prod. For bootstrap convenience both initially use the local public age recipient. **That is a pilot default, not the production access policy.**
+`init` creates separate exact creation rules for dev and prod; `init --with-stage` adds the optional exact stage rule. For bootstrap convenience both initially use the local public age recipient. **That is a pilot default, not the production access policy.**
 
 Before production reliance:
 
 - give humans individual identities rather than sharing a private age key;
-- keep dev and prod recipient sets separate;
+- keep dev, stage, and prod recipient sets least-privilege and environment-scoped;
 - protect CI identities and never expose them to fork-originated pull requests;
 - prefer OIDC-backed KMS/workload identity for production CI where available;
 - maintain independently controlled recovery paths;
@@ -152,7 +156,7 @@ The keyless check validates:
 - exact ciphertext allowlisting;
 - no tracked plaintext dotenv paths;
 - no unexpected tracked files below `env/enc/`;
-- exact dev/prod SOPS path rules and no broad env/enc rules;
+- exact dev/prod SOPS path rules, optional exact stage rule, and no broad env/enc rules;
 - policy/ciphertext paths are not tracked symlinks;
 - managed root symlink target safety;
 - `0700` decrypted directory and `0600` local decrypted files;
@@ -182,7 +186,7 @@ See [`docs/fleet-audit.md`](docs/fleet-audit.md) for the data boundary and rollo
 The pre-commit hook blocks:
 
 - root or nested plaintext dotenv files, even when force-added;
-- any tracked `env/enc/*` path other than `dev.env.enc` and `prod.env.enc`;
+- any tracked `env/enc/*` path other than exact dev/prod and an explicitly configured exact stage ciphertext;
 - tracked symlink forms of managed policy/ciphertext paths.
 
 Existing unmanaged hooks are left untouched rather than overwritten.
@@ -219,7 +223,7 @@ nix develop --command bats tests/
 nix flake check -L
 ```
 
-The regression suite covers the exact allowlist, nested/suffixed plaintext rejection, dev/prod name restriction, SOPS ciphertext shape, relative symlinking, atomic failure preservation, local-edit protection, unmanaged `.env` refusal, cleanup safety, non-secret diff behavior, generated dev/prod/recovery lifecycle, offboarding/data-key rotation, policy verification, platform certification, and keyless fleet-audit classifications including unreadable secret-looking fixtures that the audit must not echo.
+The regression suite covers the exact allowlist, nested/suffixed plaintext rejection, dev/optional-stage/prod name restriction, SOPS ciphertext shape, relative symlinking, atomic failure preservation, local-edit protection, unmanaged `.env` refusal, cleanup safety, non-secret diff behavior, generated dev/stage/prod/recovery lifecycle and negative decrypt matrix, offboarding/data-key rotation, policy verification, platform certification, and keyless fleet-audit classifications including unreadable secret-looking fixtures that the audit must not echo.
 
 ## Docs
 

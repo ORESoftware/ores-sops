@@ -24,7 +24,7 @@ Statuses:
                 or broad/noncanonical env/enc SOPS rule was detected
 
 --provider-inventory adds tracked_env_dec, sendgrid_envs, and twilio_envs columns.
-Provider states are none, dev, prod, or dev+prod. The scanner parses only the
+Provider states are none or a `+`-joined subset of dev, stage, and prod. The scanner parses only the
 variable name before '=' from tracked env/enc blobs and never prints values.
 
 --consumer-bypass adds unguarded_mkdir and dockerignore columns. unguarded_mkdir
@@ -56,15 +56,18 @@ tracked_mode() {
 sops_rule_state() {
   local file="$1"
   if [ ! -e "$file" ]; then
-    printf 'missing\n'
+    printf 'missing
+'
     return
   fi
   if ! is_tracked "$file"; then
-    printf 'untracked\n'
+    printf 'untracked
+'
     return
   fi
   if [ -L "$file" ] || [ ! -f "$file" ]; then
-    printf 'invalid\n'
+    printf 'invalid
+'
     return
   fi
 
@@ -74,30 +77,58 @@ sops_rule_state() {
       sub(/^[[:space:]]*-[[:space:]]*/, "", line)
       sub(/^[[:space:]]*/, "", line)
     }
-    line == "path_regex: ^env/enc/dev\\.env\\.enc$" { dev = 1; next }
-    line == "path_regex: ^env/enc/prod\\.env\\.enc$" { prod = 1; next }
+    line == "path_regex: ^env/enc/dev\.env\.enc$" { dev++; next }
+    line == "path_regex: ^env/enc/stage\.env\.enc$" { stage++; next }
+    line == "path_regex: ^env/enc/prod\.env\.enc$" { prod++; next }
     line ~ /^path_regex:/ && line ~ /env\/enc/ { broad = 1 }
     END {
       if (broad) print "broad"
-      else if (dev && prod) print "exact"
-      else print "missing"
+      else if (dev != 1 || prod != 1 || stage > 1) print "missing"
+      else if (stage == 1) print "exact-stage"
+      else print "exact"
     }
   ' "$file"
 }
 
 ignore_contract_state() {
-  [ -e .gitignore ] || { printf 'missing\n'; return; }
-  is_tracked .gitignore || { printf 'untracked\n'; return; }
-  [ -f .gitignore ] || { printf 'invalid\n'; return; }
-  [ ! -L .gitignore ] || { printf 'invalid\n'; return; }
+  local stage_enabled=0
+  [ -e .gitignore ] || { printf 'missing
+'; return; }
+  is_tracked .gitignore || { printf 'untracked
+'; return; }
+  [ -f .gitignore ] || { printf 'invalid
+'; return; }
+  [ ! -L .gitignore ] || { printf 'invalid
+'; return; }
 
-  git check-ignore --no-index -q .env || { printf 'missing\n'; return; }
-  git check-ignore --no-index -q sample.env || { printf 'missing\n'; return; }
-  git check-ignore --no-index -q sample.env.local || { printf 'missing\n'; return; }
-  git check-ignore --no-index -q env/dec/dev.env || { printf 'missing\n'; return; }
-  if git check-ignore --no-index -q env/enc/dev.env.enc; then printf 'missing\n'; return; fi
-  if git check-ignore --no-index -q env/enc/prod.env.enc; then printf 'missing\n'; return; fi
-  printf 'ok\n'
+  if [ -f .sops.yaml ] && grep -Fq 'path_regex: ^env/enc/stage\.env\.enc$' .sops.yaml; then
+    stage_enabled=1
+  fi
+  is_tracked env/enc/stage.env.enc && stage_enabled=1
+
+  git check-ignore --no-index -q .env || { printf 'missing
+'; return; }
+  git check-ignore --no-index -q sample.env || { printf 'missing
+'; return; }
+  git check-ignore --no-index -q sample.env.local || { printf 'missing
+'; return; }
+  git check-ignore --no-index -q env/dec/dev.env || { printf 'missing
+'; return; }
+  git check-ignore --no-index -q env/dec/stage.env || { printf 'missing
+'; return; }
+  git check-ignore --no-index -q env/dec/prod.env || { printf 'missing
+'; return; }
+  if git check-ignore --no-index -q env/enc/dev.env.enc; then printf 'missing
+'; return; fi
+  if git check-ignore --no-index -q env/enc/prod.env.enc; then printf 'missing
+'; return; fi
+  if [ "$stage_enabled" -eq 1 ] && git check-ignore --no-index -q env/enc/stage.env.enc; then
+    printf 'missing
+'
+    return
+  fi
+  printf 'ok
+'
 }
 
 attrs_state() {
@@ -154,10 +185,9 @@ dockerignore_state() {
 
 provider_env_state() {
   local pattern="$1"
-  local environment file
-  local states=()
+  local environment file joined=""
 
-  for environment in dev prod; do
+  for environment in dev stage prod; do
     file="env/enc/${environment}.env.enc"
     if ! is_tracked "$file" || [ "$(tracked_mode "$file")" = 120000 ]; then
       continue
@@ -165,27 +195,23 @@ provider_env_state() {
 
     if git show ":$file" 2>/dev/null | awk -F= -v pattern="$pattern" '
       /^[A-Za-z_][A-Za-z0-9_]*=/ {
-        if ($1 ~ pattern) {
-          found = 1
-        }
+        if ($1 ~ pattern) found = 1
       }
       END { exit(found ? 0 : 1) }
     '; then
-      states+=("$environment")
+      if [ -n "$joined" ]; then joined="$joined+$environment"; else joined="$environment"; fi
     fi
   done
 
-  case "${#states[@]}" in
-    0) printf 'none\n' ;;
-    1) printf '%s\n' "${states[0]}" ;;
-    2) printf '%s+%s\n' "${states[0]}" "${states[1]}" ;;
-  esac
+  [ -n "$joined" ] && printf '%s
+' "$joined" || printf 'none
+'
 }
 
 audit_one() {
   local requested="$1" root label
   local plaintext=0 unexpected=0 symlinks=0 env_enc_count=0 signals=0
-  local tracked_env_dec=0 unguarded_mkdir=0
+  local tracked_env_dec=0 unguarded_mkdir=0 stage_allowed=0
   local f mode rules ignore attrs status sendgrid_envs twilio_envs dockerignore
   local extra=()
 
@@ -198,11 +224,20 @@ audit_one() {
   (
     cd "$root"
 
+    if [ -f .sops.yaml ] && grep -Fq 'path_regex: ^env/enc/stage\.env\.enc$' .sops.yaml; then
+      stage_allowed=1
+    fi
+
     while IFS= read -r -d '' f; do
       mode="$(tracked_mode "$f")"
       case "$f" in
         env/enc/dev.env.enc|env/enc/prod.env.enc)
           env_enc_count=$((env_enc_count + 1))
+          [ "$mode" != 120000 ] || symlinks=$((symlinks + 1))
+          ;;
+        env/enc/stage.env.enc)
+          env_enc_count=$((env_enc_count + 1))
+          [ "$stage_allowed" -eq 1 ] || unexpected=$((unexpected + 1))
           [ "$mode" != 120000 ] || symlinks=$((symlinks + 1))
           ;;
         env/enc/*)
@@ -239,7 +274,7 @@ audit_one() {
 
     if [ "$plaintext" -gt 0 ] || [ "$unexpected" -gt 0 ] || [ "$symlinks" -gt 0 ] || [ "$rules" = broad ] || [ "$rules" = invalid ] || [ "$ignore" = invalid ] || [ "$attrs" = invalid ]; then
       status=conflicting
-    elif [ "$rules" = exact ] && [ "$ignore" = ok ] && [ "$attrs" = ok ]; then
+    elif { [ "$rules" = exact ] || [ "$rules" = exact-stage ]; } && [ "$ignore" = ok ] && [ "$attrs" = ok ]; then
       status=adopted
     elif [ "$signals" -eq 0 ]; then
       status=not-adopted

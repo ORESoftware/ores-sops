@@ -70,7 +70,7 @@ ores-sops-fleet-audit --provider-inventory --consumer-bypass ../repo-a ../repo-b
 
 ## Statuses
 
-- `adopted`: tracked exact dev/prod SOPS rules, tracked canonical ignore behavior, and tracked ciphertext line-ending attributes are present with no tracked path conflict.
+- `adopted`: tracked exact dev/prod SOPS rules with an optional exact stage rule, tracked canonical ignore behavior, and tracked ciphertext line-ending attributes are present with no tracked path conflict.
 - `not-adopted`: no SOPS dotenv adoption signal was found.
 - `partial`: some adoption signal exists, but the tracked contract is incomplete; this includes canonical-looking policy files that exist only in the local working tree.
 - `conflicting`: tracked plaintext dotenv (including tracked `env/dec/*`), an unexpected `env/enc/*` path, a tracked symlink policy/ciphertext path, or a broad/noncanonical `env/enc` SOPS rule was found.
