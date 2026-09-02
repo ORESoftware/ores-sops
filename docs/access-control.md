@@ -13,14 +13,22 @@ env/enc/dev.env.enc
 env/enc/prod.env.enc
 ```
 
-They must use distinct recipient sets before production reliance. A shared,
-independently controlled recovery recipient is allowed, but the full dev and
-prod sets must not be identical and neither set may be wholly contained in the
-other. Run the keyless gate:
+They must use a least-privilege recipient matrix before production reliance. A
+shared, independently controlled recovery recipient is allowed. The required
+property is that at least one ordinary development recipient is omitted from
+prod; otherwise every developer who can decrypt dev can also decrypt prod.
+
+Production-authorized developers may deliberately be listed on both files, so a
+prod recipient set contained within dev is valid. Repositories that require a
+separate hardware or workload identity used only for production can enable the
+stricter production-exclusive check:
 
 ```sh
 nix run github:ORESoftware/ores-sops#access-audit -- check
-# or, inside nix develop:
+nix run github:ORESoftware/ores-sops#access-audit -- \
+  check --require-prod-exclusive
+
+# Or, inside nix develop:
 ores-sops-access-audit check
 ```
 
@@ -40,8 +48,8 @@ For a normal `age:` recipient list, access is **OR**:
 - Bob cannot decrypt that file merely because Bob can clone the repository or
   because Bob is listed on another environment's rule.
 - A recipient listed on both dev and prod can decrypt both. This should be
-  deliberate, normally for a tightly controlled recovery identity or an
-  explicitly authorized production operator.
+  deliberate, normally for a tightly controlled recovery identity, a privileged
+  developer, or an explicitly authorized production operator.
 
 The public recipient is safe to commit. The corresponding private identity must
 stay on the developer device, hardware token, secret manager, or protected
@@ -53,7 +61,8 @@ chat.
 | Identity class | dev | prod | Notes |
 | --- | ---: | ---: | --- |
 | ordinary developer | yes | no | Individual human age identity |
-| production operator | optional | yes | Prefer a separate hardware-backed production identity |
+| production-authorized developer | yes | yes | Same identity may be mapped to both files |
+| production-only operator | optional | yes | Prefer a separate hardware-backed identity |
 | dev CI workload | yes | no | Never expose to fork-originated pull requests |
 | prod deploy workload | no | yes | Prefer OIDC-backed KMS/workload identity where practical |
 | break-glass recovery | yes | yes | Offline and independently controlled; test recovery |
@@ -61,7 +70,8 @@ chat.
 A person can use one age keypair across multiple allowed files because the
 recipient-to-file mapping still enforces the boundary. Separate production
 hardware identities reduce blast radius further and are preferred for elevated
-access.
+access, but they are not required for the common “some developers also operate
+production” hierarchy.
 
 ## Canonical `.sops.yaml` pattern
 
@@ -74,6 +84,7 @@ creation_rules:
     age:
       - age1_DEV_ALICE_REPLACE_WITH_REAL_PUBLIC_RECIPIENT
       - age1_DEV_BOB_REPLACE_WITH_REAL_PUBLIC_RECIPIENT
+      - age1_PROD_OPERATOR_REPLACE_WITH_REAL_PUBLIC_RECIPIENT
       - age1_RECOVERY_REPLACE_WITH_REAL_PUBLIC_RECIPIENT
 
   - path_regex: ^env/enc/prod\.env\.enc$
@@ -84,9 +95,9 @@ creation_rules:
 ```
 
 This gives Alice and Bob development access without production access. The
-production operator and deployment workload can decrypt production without
-acquiring the ordinary developer identities. The recovery identity can decrypt
-both by explicit policy.
+production operator is deliberately listed on both files. The production deploy
+workload is production-only, and the recovery identity can decrypt both by
+explicit policy.
 
 Creation rules are desired state for new encryption. Existing ciphertext keeps
 its current wrapped recipient metadata until it is synchronized.
