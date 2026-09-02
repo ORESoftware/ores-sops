@@ -23,6 +23,9 @@ jobs:
         with:
           persist-credentials: true
 
+      - name: Repair structural migration matcher
+        run: python3 scripts/repair-stage-migration.py
+
       - name: Apply fail-closed migration
         run: python3 scripts/apply-stage-contract.py
 
@@ -36,7 +39,7 @@ jobs:
           git diff --check
 
       - name: Remove one-time migration machinery
-        run: rm scripts/apply-stage-contract.py .github/workflows/apply-stage-contract.yml
+        run: rm scripts/apply-stage-contract.py scripts/repair-stage-migration.py .github/workflows/apply-stage-contract.yml
 
       - name: Commit generated v0.4 contract
         shell: bash
