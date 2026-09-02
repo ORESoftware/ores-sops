@@ -270,6 +270,20 @@ EOF_IGNORE
   [ "$status" -ne 0 ]
   [[ "$output" == *"obvious plaintext assignment"* ]]
 }
+@test "verify accepts an exact empty assignment because it contains no plaintext secret" {
+  printf 'OPTIONAL_PROVIDER_TOKEN=\nsops_mac=ENC[fake]\n' > env/enc/dev.env.enc
+  git add env/enc/dev.env.enc
+  run ores-sops verify
+  [ "$status" -eq 0 ]
+}
+
+@test "verify still rejects quoted placeholder values" {
+  printf 'OPTIONAL_PROVIDER_TOKEN=""\nsops_mac=ENC[fake]\n' > env/enc/dev.env.enc
+  git add env/enc/dev.env.enc
+  run ores-sops verify
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"obvious plaintext assignment"* ]]
+}
 
 @test "verify rejects broad env enc creation rules" {
   cat >> .sops.yaml <<EOF_SOPS
