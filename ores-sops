@@ -46,23 +46,21 @@ dec_path() { need_env "$1"; printf '%s/env/dec/%s.env' "$(repo_root)" "$1"; }
 stamp_path() { need_env "$1"; printf '%s/env/dec/.%s.env.sha256' "$(repo_root)" "$1"; }
 
 count_exact_sops_rule() {
-  local environment="$1" root
+  local environment="$1" root expected line trimmed count=0
   need_env "$environment"
   root="$(repo_root)"
-  [ -f "$root/.sops.yaml" ] || { printf '0
-'; return; }
-  awk -v environment="$environment" '
-    BEGIN {
-      expected = "path_regex: ^env/enc/" environment "\.env\.enc$"
-    }
-    {
-      line=$0
-      sub(/^[[:space:]]*-[[:space:]]*/, "", line)
-      sub(/^[[:space:]]*/, "", line)
-      if (line == expected) count++
-    }
-    END { print count + 0 }
-  ' "$root/.sops.yaml"
+  [ -f "$root/.sops.yaml" ] || { printf '0\n'; return; }
+  expected="path_regex: ^env/enc/${environment}\\.env\\.enc\$"
+
+  while IFS= read -r line || [ -n "$line" ]; do
+    trimmed="${line#"${line%%[![:space:]]*}"}"
+    case "$trimmed" in
+      '- '*) trimmed="${trimmed#- }" ;;
+    esac
+    [ "$trimmed" = "$expected" ] && count=$((count + 1))
+  done <"$root/.sops.yaml"
+
+  printf '%s\n' "$count"
 }
 
 stage_rule_present() {
