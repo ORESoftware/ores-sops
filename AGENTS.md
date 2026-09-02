@@ -5,6 +5,7 @@ Canonical SOPS dotenv contract for ORESoftware and consuming orgs.
 - Secrets at rest: this repository (`env/enc` ciphertext, `env/dec` runtime plaintext).
 - Repository readers may see ciphertext filenames and encrypted bytes; only identities listed for an exact environment may create or read its local `env/dec/<environment>.env` plaintext.
 - An unauthorized `ores-sops use stage|prod` attempt must fail without creating that plaintext, changing the active `.env` symlink, or replacing a prior complete decrypted file.
+- Access-control tests must prove both authorized decryption and unauthorized cross-environment failure with generated disposable identities; policy inspection alone is insufficient.
 - Telemetry: github.com/ores-otel — a different layer; it *consumes* this contract.
 - Auth: github.com/shared-auth.
 - Sync: github.com/opto-sync.
