@@ -8,12 +8,15 @@ fail() {
   exit 1
 }
 
-root="$(git rev-parse --show-toplevel 2>/dev/null)" 
+root="$(git rev-parse --show-toplevel 2>/dev/null)"
 [ -n "$root" ] || fail "not inside a Git repository"
 cd "$root"
 
-[ -f justfile ] || fail "missing canonical justfile"
+if [ ! -e justfile ] && [ ! -L justfile ]; then
+  fail "missing canonical justfile"
+fi
 [ ! -L justfile ] || fail "justfile must not be a symlink"
+[ -f justfile ] || fail "justfile must be a regular file"
 mode="$(git ls-files -s -- justfile | awk 'NR == 1 { print $1 }')"
 [ "$mode" = "100644" ] || fail "justfile must be tracked as a non-executable regular file"
 
@@ -44,7 +47,7 @@ done
 if grep -Eq '(^|[[:space:];|&])sops([[:space:]]|$)' justfile; then
   fail "justfile must not invoke sops directly"
 fi
-if grep -Eq '(mkdir|install|chmod)[^#\n]*env/dec' justfile; then
+if grep -Eq '(mkdir|install|chmod)[^#]*env/dec' justfile; then
   fail "justfile must not create or chmod env/dec directly"
 fi
 
