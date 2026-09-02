@@ -6,7 +6,8 @@ tmp="$(mktemp -d)"
 trap 'rm -rf -- "$tmp"' EXIT HUP INT TERM
 
 make_fixture() {
-  local name="$1" fixture="$tmp/$name"
+  local name="$1"
+  local fixture="$tmp/$name"
   mkdir -p "$fixture/scripts"
   cp "$source_root/justfile" "$fixture/justfile"
   cp "$source_root/.gitignore" "$fixture/.gitignore"
@@ -21,6 +22,7 @@ make_fixture() {
 
 expect_pass() {
   local fixture="$1"
+  local output
   output="$(cd "$fixture" && bash scripts/check-repository-boundary.sh 2>&1)"
   case "$output" in
     *'repository boundary: PASS'*) ;;
