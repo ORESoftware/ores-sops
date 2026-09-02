@@ -69,5 +69,5 @@ EOF_IGNORE
   run ores-sops-fleet-audit "$repo"
   [ "$status" -eq 0 ]
   [[ "$output" == *$'\tconflicting\t'* ]]
-  [[ "$output" == *$'\t1\t0\texact\t'* ]]
+  [[ "$output" == *$'\tconflicting\t0\t1\t0\texact\t'* ]]
 }

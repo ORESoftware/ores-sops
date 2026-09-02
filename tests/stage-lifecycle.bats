@@ -106,6 +106,27 @@ EOF_IGNORE
   sops_decrypt "$RECOVERY_KEY" env/enc/prod.env.enc
 }
 
+
+@test "unauthorized stage and prod activation leave dev plaintext and symlink untouched" {
+  SOPS_AGE_KEY_FILE="$DEV_KEY" ores-sops use dev >/dev/null
+  cp env/dec/dev.env "$BATS_TEST_TMPDIR/dev-before.env"
+  before_target="$(readlink .env)"
+
+  run env SOPS_AGE_KEY_FILE="$DEV_KEY" ores-sops use stage
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"could not decrypt 'stage'"* ]]
+  [ ! -e env/dec/stage.env ]
+  [ "$(readlink .env)" = "$before_target" ]
+  cmp "$BATS_TEST_TMPDIR/dev-before.env" env/dec/dev.env
+
+  run env SOPS_AGE_KEY_FILE="$DEV_KEY" ores-sops use prod
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"could not decrypt 'prod'"* ]]
+  [ ! -e env/dec/prod.env ]
+  [ "$(readlink .env)" = "$before_target" ]
+  cmp "$BATS_TEST_TMPDIR/dev-before.env" env/dec/dev.env
+}
+
 @test "stage activation is atomic and uses the managed relative symlink" {
   SOPS_AGE_KEY_FILE="$STAGE_KEY" ores-sops use stage
   [ -L .env ]

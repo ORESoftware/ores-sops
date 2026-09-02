@@ -54,40 +54,42 @@ tracked_mode() {
 }
 
 sops_rule_state() {
-  local file="$1"
+  local file="$1" line trimmed dev=0 stage=0 prod=0 broad=0
   if [ ! -e "$file" ]; then
-    printf 'missing
-'
+    printf 'missing\n'
     return
   fi
   if ! is_tracked "$file"; then
-    printf 'untracked
-'
+    printf 'untracked\n'
     return
   fi
   if [ -L "$file" ] || [ ! -f "$file" ]; then
-    printf 'invalid
-'
+    printf 'invalid\n'
     return
   fi
 
-  awk '
-    {
-      line = $0
-      sub(/^[[:space:]]*-[[:space:]]*/, "", line)
-      sub(/^[[:space:]]*/, "", line)
-    }
-    line == "path_regex: ^env/enc/dev\.env\.enc$" { dev++; next }
-    line == "path_regex: ^env/enc/stage\.env\.enc$" { stage++; next }
-    line == "path_regex: ^env/enc/prod\.env\.enc$" { prod++; next }
-    line ~ /^path_regex:/ && line ~ /env\/enc/ { broad = 1 }
-    END {
-      if (broad) print "broad"
-      else if (dev != 1 || prod != 1 || stage > 1) print "missing"
-      else if (stage == 1) print "exact-stage"
-      else print "exact"
-    }
-  ' "$file"
+  while IFS= read -r line || [ -n "$line" ]; do
+    trimmed="${line#"${line%%[![:space:]]*}"}"
+    case "$trimmed" in
+      '- '*) trimmed="${trimmed#- }" ;;
+    esac
+    case "$trimmed" in
+      'path_regex: ^env/enc/dev\.env\.enc$') dev=$((dev + 1)) ;;
+      'path_regex: ^env/enc/stage\.env\.enc$') stage=$((stage + 1)) ;;
+      'path_regex: ^env/enc/prod\.env\.enc$') prod=$((prod + 1)) ;;
+      path_regex:*env/enc*) broad=1 ;;
+    esac
+  done <"$file"
+
+  if [ "$broad" -eq 1 ]; then
+    printf 'broad\n'
+  elif [ "$dev" -ne 1 ] || [ "$prod" -ne 1 ] || [ "$stage" -gt 1 ]; then
+    printf 'missing\n'
+  elif [ "$stage" -eq 1 ]; then
+    printf 'exact-stage\n'
+  else
+    printf 'exact\n'
+  fi
 }
 
 ignore_contract_state() {

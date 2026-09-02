@@ -130,16 +130,19 @@ parse_policy() {
       ''|'#'*) continue ;;
       '- path_regex: ^env/enc/dev\.env\.enc$')
         DEV_RULES=$((DEV_RULES + 1))
+        [ "$DEV_RULES" -eq 1 ] || fail "expected exactly one canonical dev creation rule"
         current="dev"
         section=""
         ;;
       '- path_regex: ^env/enc/stage\.env\.enc$')
         STAGE_RULES=$((STAGE_RULES + 1))
+        [ "$STAGE_RULES" -le 1 ] || fail "expected at most one canonical stage creation rule"
         current="stage"
         section=""
         ;;
       '- path_regex: ^env/enc/prod\.env\.enc$')
         PROD_RULES=$((PROD_RULES + 1))
+        [ "$PROD_RULES" -eq 1 ] || fail "expected exactly one canonical prod creation rule"
         current="prod"
         section=""
         ;;
