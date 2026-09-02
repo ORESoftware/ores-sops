@@ -4,6 +4,7 @@ import importlib.util
 from pathlib import Path
 import os
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -11,6 +12,7 @@ MODULE_PATH = Path(__file__).resolve().parents[1] / 'tools' / 'audit_env_contrac
 SPEC = importlib.util.spec_from_file_location('audit_env_contract', MODULE_PATH)
 assert SPEC and SPEC.loader
 AUDIT = importlib.util.module_from_spec(SPEC)
+sys.modules[SPEC.name] = AUDIT
 SPEC.loader.exec_module(AUDIT)
 
 
@@ -62,7 +64,7 @@ class Repository:
             self.write(path, content)
 
     def add(self) -> None:
-        subprocess.run(['git', 'add', '-A'], cwd=self.root, check=True)
+        subprocess.run(['git', 'add', '-f', '-A'], cwd=self.root, check=True)
 
     def findings(self):
         self.add()
