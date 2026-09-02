@@ -15,7 +15,8 @@ Canonical SOPS dotenv contract for ORESoftware and consuming orgs.
 - Treat `.sops.yaml` recipient changes as access-control changes: public age recipients are committed, private identities never are.
 - Before production reliance, at least one ordinary development recipient must be omitted from prod; shared recovery and production-authorized developers may be explicit on both.
 - Use `--require-prod-exclusive` when policy also requires a production-only hardware or workload identity.
-- Run `ores-sops-access-audit check` with `ores-sops verify`; do not bypass a failed access audit by copying every key into prod.
+- Run `ores-sops-access-audit check --require-ciphertext` with `ores-sops verify` so desired policy and actual ciphertext metadata must agree.
+- Do not bypass a failed access audit by copying every key into prod or by using `--policy-only` after ciphertext exists.
 - The v0.3 contract is exactly dev/prod. Do not add stage or another `env/enc` path without a versioned helper, policy, and test rollout.
 
 See [`docs/scope.md`](docs/scope.md), [`docs/consumer-boundary.md`](docs/consumer-boundary.md), [`docs/fleet-audit.md`](docs/fleet-audit.md), and [`docs/access-control.md`](docs/access-control.md).
