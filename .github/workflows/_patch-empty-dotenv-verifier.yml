@@ -1,22 +1,17 @@
-name: one-shot empty dotenv verifier patch
+name: Patch empty dotenv verifier
 
 on:
   push:
     branches:
-      - fix/keyless-empty-dotenv-values-20260901
+      - 'fix/keyless-empty-dotenv-values-20260901'
     paths:
-      - .github/workflows/_patch-empty-dotenv-verifier.yml
+      - '.github/workflows/_patch-empty-dotenv-verifier.yml'
 
 permissions:
   contents: write
 
-concurrency:
-  group: empty-dotenv-verifier-${{ github.ref }}
-  cancel-in-progress: false
-
 jobs:
-  patch-and-test:
-    if: github.actor != 'github-actions[bot]'
+  patch:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -25,7 +20,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Apply narrowly-scoped verifier and regression changes
+      - name: Apply narrowly scoped verifier and regression changes
         shell: bash
         run: |
           set -euo pipefail
@@ -64,7 +59,7 @@ jobs:
   [ "$status" -eq 0 ]
 }
 
-@test "verify still rejects quoted or whitespace placeholder values" {
+@test "verify still rejects quoted placeholder values" {
   printf 'OPTIONAL_PROVIDER_TOKEN=""\\nsops_mac=ENC[fake]\\n' > env/enc/dev.env.enc
   git add env/enc/dev.env.enc
   run ores-sops verify
@@ -85,18 +80,17 @@ jobs:
         with:
           flakehub: false
 
-      - name: Run the complete repository check
+      - name: Run complete repository checks
         run: nix flake check -L
 
-      - name: Commit the tested patch and remove this workflow
+      - name: Commit tested patch and remove workflow
         shell: bash
         run: |
           set -euo pipefail
-          branch=${GITHUB_REF_NAME}
           git rm -- .github/workflows/_patch-empty-dotenv-verifier.yml
           git add ores-sops tests/ores-sops.bats
           git diff --cached --check
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git commit -m 'fix(verify): permit exact empty dotenv values'
-          git push origin "HEAD:$branch"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
