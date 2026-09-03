@@ -1,0 +1,33 @@
+name: Encrypted environment contract
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out exact revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run adversarial contract tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m unittest -v test/test_audit_env_contract.py
+
+      - name: Audit the checked-in repository state
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tools/audit_env_contract.py
