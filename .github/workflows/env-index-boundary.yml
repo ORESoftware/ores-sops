@@ -1,0 +1,45 @@
+name: Encrypted environment index boundary
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: env-index-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  keyless:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Check the exact candidate tree and adversarial fixtures
+        shell: bash
+        run: |
+          set -euo pipefail
+          for script in scripts/check-env-index.sh tests/test-env-boundary.sh tests/test-env-index-self.sh tests/test-env-index-sops.sh; do
+            bash -n "$script"
+          done
+          bash scripts/check-env-index.sh
+          bash tests/test-env-index-self.sh
+          bash tests/test-env-boundary.sh
+  generated-sops:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: cachix/install-nix-action@630ae543ea3a38a9a4166f03376c02c50f408342
+        with:
+          extra_nix_config: experimental-features = nix-command flakes
+      - name: Validate real SOPS serialization using generated test-only identities
+        shell: bash
+        run: nix develop --no-update-lock-file -c bash tests/test-env-index-sops.sh
