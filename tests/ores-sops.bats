@@ -82,7 +82,7 @@ EOF_IGNORE
   [ -z "$(find "$outside" -mindepth 1 -maxdepth 1 -print -quit)" ]
 }
 
-@test "only dev and prod environment names are accepted" {
+@test "only canonical environment names are accepted" {
   run ores-sops use app
   [ "$status" -ne 0 ]
   [[ "$output" == *"unsupported environment 'app'"* ]]
@@ -375,7 +375,7 @@ EOF_OLD
   [ "$(grep -c -- "- $other_recipient" .sops.yaml)" = 2 ]
 }
 
-@test "init rejects a malformed recipient instead of writing a policy nobody can use" {
+@test "init rejects a malformed recipient without echoing it" {
   fresh="$BATS_TEST_TMPDIR/bad"
   mkdir -p "$fresh"
   cd "$fresh"
@@ -383,7 +383,8 @@ EOF_OLD
 
   run ores-sops init --recipient age1-not-a-real-key
   [ "$status" -ne 0 ]
-  [[ "$output" == *"not an age public key"* ]]
+  [[ "$output" == *"invalid age public recipient supplied"* ]]
+  [[ "$output" != *"age1-not-a-real-key"* ]]
   [ ! -f .sops.yaml ]
 }
 
