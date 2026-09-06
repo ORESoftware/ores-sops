@@ -2,3 +2,18 @@ result
 result-*
 .direnv/
 .DS_Store
+
+# SOPS ciphertext is reviewable under env/enc/. Plaintext/decrypted material is
+# runtime-only and must never enter the Git index.
+/env/dec/
+**/env/dec/
+/.env
+/.env.*
+!/.env.example
+!/.env.sample
+!/.env.template
+
+# Age private identities are never repository material.
+/age.key
+/age.txt
+/keys.txt
