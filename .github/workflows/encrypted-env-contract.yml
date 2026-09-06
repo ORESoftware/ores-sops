@@ -24,7 +24,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 -m unittest -v test/test_audit_env_contract.py
+          python3 -m unittest discover -s test -p 'test_audit_env_contract.py' -v
 
       - name: Audit the checked-in repository state
         shell: bash
