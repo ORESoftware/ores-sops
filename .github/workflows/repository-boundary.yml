@@ -8,7 +8,7 @@ on:
       - scripts/check-repository-boundary.sh
       - tests/test-repository-boundary.sh
       - .github/workflows/repository-boundary.yml
-      - result
+      - 'result*'
   push:
     branches: [main]
     paths:
@@ -17,7 +17,8 @@ on:
       - scripts/check-repository-boundary.sh
       - tests/test-repository-boundary.sh
       - .github/workflows/repository-boundary.yml
-      - result
+      - 'result*'
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -41,10 +42,11 @@ jobs:
           persist-credentials: false
           show-progress: false
 
-      - name: Validate repository boundary without secret access
+      - name: Validate exact checkout and candidate-index boundary
         shell: bash
         run: |
           set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           bash scripts/check-repository-boundary.sh
           bash tests/test-repository-boundary.sh
 

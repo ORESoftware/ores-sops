@@ -50,6 +50,11 @@ printf '/nix/store/test-only-ores-sops\n' >"$fixture/result"
 git -C "$fixture" add -f result
 expect_fail "$fixture" 'tracked Nix result/result-* build output found'
 
+fixture="$(make_fixture tracked-result-suffix)"
+printf '/nix/store/test-only-ores-sops\n' >"$fixture/result-debug"
+git -C "$fixture" add -f result-debug
+expect_fail "$fixture" 'tracked Nix result/result-* build output found'
+
 fixture="$(make_fixture direct-sops)"
 cat >>"$fixture/justfile" <<'EOF_BAD_SOPS'
 
@@ -58,6 +63,24 @@ unsafe-decrypt:
 EOF_BAD_SOPS
 git -C "$fixture" add justfile
 expect_fail "$fixture" 'justfile must not invoke sops directly'
+
+fixture="$(make_fixture staged-unsafe-worktree-safe)"
+cat >>"$fixture/justfile" <<'EOF_STAGED_BAD_SOPS'
+
+unsafe-decrypt:
+    sops decrypt env/enc/dev.env.enc
+EOF_STAGED_BAD_SOPS
+git -C "$fixture" add justfile
+cp "$source_root/justfile" "$fixture/justfile"
+expect_fail "$fixture" 'justfile must not invoke sops directly'
+
+fixture="$(make_fixture unstaged-unsafe-index-safe)"
+cat >>"$fixture/justfile" <<'EOF_UNSTAGED_BAD_SOPS'
+
+unsafe-decrypt:
+    sops decrypt env/enc/dev.env.enc
+EOF_UNSTAGED_BAD_SOPS
+expect_pass "$fixture"
 
 fixture="$(make_fixture direct-runtime-directory)"
 cat >>"$fixture/justfile" <<'EOF_BAD_DIRECTORY'
@@ -82,5 +105,15 @@ rm "$fixture/justfile"
 ln -s /tmp/not-a-justfile "$fixture/justfile"
 git -C "$fixture" add -f justfile
 expect_fail "$fixture" 'justfile must not be a symlink'
+
+fixture="$(make_fixture executable-justfile)"
+chmod 755 "$fixture/justfile"
+git -C "$fixture" add justfile
+expect_fail "$fixture" 'justfile must be tracked as a non-executable regular file'
+
+fixture="$tmp/outside-git"
+mkdir -p "$fixture/scripts"
+cp "$source_root/scripts/check-repository-boundary.sh" "$fixture/scripts/check-repository-boundary.sh"
+expect_fail "$fixture" 'not inside a Git repository'
 
 printf 'repository boundary adversarial tests: PASS\n'

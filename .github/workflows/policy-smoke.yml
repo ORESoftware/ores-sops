@@ -23,9 +23,12 @@ jobs:
           persist-credentials: false
 
       - name: Shell syntax
-        run: bash -n ./ores-sops
+        run: |
+          bash -n ./ores-sops
+          bash -n ./scripts/access-audit.sh
+          bash -n ./scripts/fleet-audit.sh
 
-      - name: Clean-repository policy smoke
+      - name: Legacy dev prod policy smoke
         shell: bash
         run: |
           set -euo pipefail
@@ -47,10 +50,12 @@ jobs:
             git check-ignore --no-index -q nested/child.env
             git check-ignore --no-index -q nested/child.env.production
             git check-ignore --no-index -q env/dec/dev.env
+            git check-ignore --no-index -q env/dec/stage.env
             git check-ignore --no-index -q env/dec/prod.env
 
             ! git check-ignore --no-index -q env/enc/dev.env.enc
             ! git check-ignore --no-index -q env/enc/prod.env.enc
+            git check-ignore --no-index -q env/enc/stage.env.enc
 
             grep -Fxq '*.env' .gitignore
             grep -Fxq '*/*.env' .gitignore
@@ -59,17 +64,87 @@ jobs:
             grep -Fxq '/env/enc/*' .gitignore
             grep -Fxq '!/env/enc/dev.env.enc' .gitignore
             grep -Fxq '!/env/enc/prod.env.enc' .gitignore
+            ! grep -Fq 'path_regex: ^env/enc/stage\.env\.enc$' .sops.yaml
 
             grep -Fq 'path_regex: ^env/enc/dev\.env\.enc$' .sops.yaml
             grep -Fq 'path_regex: ^env/enc/prod\.env\.enc$' .sops.yaml
             grep -Fq '/env/enc/*.env.enc text eol=lf' .gitattributes
             test "$(stat -c '%a' env/dec)" = 700
 
-            if "$GITHUB_WORKSPACE/ores-sops" use app >/tmp/ores-sops-app.out 2>&1; then
+            HOME="$home" "$GITHUB_WORKSPACE/ores-sops" verify
+
+            # Legacy init remains usable for bootstrap, but intentionally is not
+            # accepted as a least-privilege production recipient matrix.
+            if bash "$GITHUB_WORKSPACE/scripts/access-audit.sh" check --min-recipients 1 --policy-only \
+              >/tmp/ores-sops-legacy-access.out 2>&1; then
+              echo 'expected identical bootstrap recipients to fail the access audit' >&2
+              exit 1
+            fi
+            grep -q 'no environment-exclusive recipient' /tmp/ores-sops-legacy-access.out
+
+            if HOME="$home" "$GITHUB_WORKSPACE/ores-sops" use stage >/tmp/ores-sops-stage-disabled.out 2>&1; then
+              echo 'expected unconfigured stage to fail' >&2
+              exit 1
+            fi
+            grep -q 'stage is not configured' /tmp/ores-sops-stage-disabled.out
+
+            if HOME="$home" "$GITHUB_WORKSPACE/ores-sops" use app >/tmp/ores-sops-app.out 2>&1; then
               echo 'expected unsupported environment to fail' >&2
               exit 1
             fi
             grep -q "unsupported environment 'app'" /tmp/ores-sops-app.out
+          )
+
+      - name: Scoped dev stage prod policy smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          work="$(mktemp -d)"
+          home="$(mktemp -d)"
+          trap 'rm -rf "$work" "$home"' EXIT
+
+          local_recipient="age1$(printf 'd%.0s' {1..58})"
+          stage_recipient="age1$(printf 's%.0s' {1..58})"
+          prod_recipient="age1$(printf 'p%.0s' {1..58})"
+          recovery_recipient="age1$(printf 'r%.0s' {1..58})"
+
+          git -C "$work" init -q
+          mkdir -p "$home/.config/sops/age"
+          printf '# public key: %s\n' "$local_recipient" > "$home/.config/sops/age/keys.txt"
+
+          (
+            cd "$work"
+            HOME="$home" "$GITHUB_WORKSPACE/ores-sops" init \
+              --with-stage \
+              --stage-recipient "$stage_recipient" \
+              --prod-recipient "$prod_recipient" \
+              --recovery-recipient "$recovery_recipient"
+
+            grep -Fq 'path_regex: ^env/enc/dev\.env\.enc$' .sops.yaml
+            grep -Fq 'path_regex: ^env/enc/stage\.env\.enc$' .sops.yaml
+            grep -Fq 'path_regex: ^env/enc/prod\.env\.enc$' .sops.yaml
+            test "$(grep -c -- "- $local_recipient" .sops.yaml)" = 1
+            test "$(grep -c -- "- $stage_recipient" .sops.yaml)" = 1
+            test "$(grep -c -- "- $prod_recipient" .sops.yaml)" = 1
+            test "$(grep -c -- "- $recovery_recipient" .sops.yaml)" = 3
+
+            ! git check-ignore --no-index -q env/enc/dev.env.enc
+            ! git check-ignore --no-index -q env/enc/stage.env.enc
+            ! git check-ignore --no-index -q env/enc/prod.env.enc
+            git check-ignore --no-index -q env/dec/stage.env
+
+            HOME="$home" "$GITHUB_WORKSPACE/ores-sops" verify
+            bash "$GITHUB_WORKSPACE/scripts/access-audit.sh" check \
+              --require-stage \
+              --require-stage-exclusive \
+              --require-prod-exclusive \
+              --policy-only
+
+            if HOME="$home" "$GITHUB_WORKSPACE/ores-sops" use staging >/tmp/ores-sops-staging.out 2>&1; then
+              echo 'expected staging alias to fail' >&2
+              exit 1
+            fi
+            grep -q "unsupported environment 'staging'" /tmp/ores-sops-staging.out
           )
 
   full-nix:

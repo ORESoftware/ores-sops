@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Validate repository-local convenience/build artifacts without reading secrets.
+# Validate repository convenience/build artifacts from the exact candidate Git index.
 
 set -euo pipefail
 
@@ -12,23 +12,41 @@ root="$(git rev-parse --show-toplevel 2>/dev/null || true)"
 [ -n "$root" ] || fail "not inside a Git repository"
 cd "$root"
 
-if [ ! -e justfile ] && [ ! -L justfile ]; then
-  fail "missing canonical justfile"
-fi
-[ ! -L justfile ] || fail "justfile must not be a symlink"
-[ -f justfile ] || fail "justfile must be a regular file"
-mode="$(git ls-files -s -- justfile | awk 'NR == 1 { print $1 }')"
-[ "$mode" = "100644" ] || fail "justfile must be tracked as a non-executable regular file"
+candidate_tree="$(git write-tree 2>/dev/null)" || fail "candidate Git index cannot be serialized"
+[ -n "$candidate_tree" ] || fail "candidate Git index did not produce a tree"
 
-grep -Fxq 'result' .gitignore || fail ".gitignore must ignore result"
-grep -Fxq 'result-*' .gitignore || fail ".gitignore must ignore result-*"
+tmp="$(mktemp -d)"
+trap 'rm -rf -- "$tmp"' EXIT HUP INT TERM
+
+just_entry="$(git ls-tree "$candidate_tree" -- justfile)"
+[ -n "$just_entry" ] || fail "missing canonical justfile from candidate Git index"
+read -r just_mode just_type just_object just_path <<<"$just_entry"
+[ "$just_type" = "blob" ] || fail "justfile must be a blob"
+[ "$just_path" = "justfile" ] || fail "candidate tree returned an unexpected justfile path"
+case "$just_mode" in
+  100644) ;;
+  120000) fail "justfile must not be a symlink" ;;
+  *) fail "justfile must be tracked as a non-executable regular file" ;;
+esac
+git cat-file blob "$just_object" >"$tmp/justfile"
+
+ignore_entry="$(git ls-tree "$candidate_tree" -- .gitignore)"
+[ -n "$ignore_entry" ] || fail "missing .gitignore from candidate Git index"
+read -r ignore_mode ignore_type ignore_object ignore_path <<<"$ignore_entry"
+[ "$ignore_type" = "blob" ] || fail ".gitignore must be a blob"
+[ "$ignore_path" = ".gitignore" ] || fail "candidate tree returned an unexpected .gitignore path"
+[ "$ignore_mode" = "100644" ] || fail ".gitignore must be a non-executable regular file"
+git cat-file blob "$ignore_object" >"$tmp/gitignore"
+
+grep -Fxq 'result' "$tmp/gitignore" || fail ".gitignore must ignore result"
+grep -Fxq 'result-*' "$tmp/gitignore" || fail ".gitignore must ignore result-*"
 
 tracked_build_output=0
 while IFS= read -r -d '' path; do
   case "$path" in
     result|result-*) tracked_build_output=1 ;;
   esac
-done < <(git ls-files -z -- 'result' 'result-*')
+done < <(git ls-tree -r -z --name-only "$candidate_tree")
 [ "$tracked_build_output" = 0 ] || fail "tracked Nix result/result-* build output found"
 
 required_recipes=(
@@ -37,17 +55,17 @@ required_recipes=(
   status refresh verify lock install-hooks check
 )
 for recipe in "${required_recipes[@]}"; do
-  grep -Eq "^${recipe}:$" justfile || fail "justfile is missing recipe: $recipe"
+  grep -Eq "^${recipe}:$" "$tmp/justfile" || fail "justfile is missing recipe: $recipe"
 done
 
 # The repository Just boundary is intentionally declarative and closed: every
 # secret-adjacent operation delegates to ores-sops, while the full gate delegates
 # to the pinned Nix flake. Reject direct SOPS, ad-hoc env/dec creation, and any
 # newly introduced shell body until it receives an explicit policy update.
-if grep -Eq '(^|[[:space:];|&])sops([[:space:]]|$)' justfile; then
+if grep -Eq '(^|[[:space:];|&])sops([[:space:]]|$)' "$tmp/justfile"; then
   fail "justfile must not invoke sops directly"
 fi
-if grep -Eq '(mkdir|install|chmod)[^#]*env/dec' justfile; then
+if grep -Eq '(mkdir|install|chmod)[^#]*env/dec' "$tmp/justfile"; then
   fail "justfile must not create or chmod env/dec directly"
 fi
 
@@ -62,7 +80,7 @@ if ! awk '
     if (line ~ /^ores-sops use --force (dev|prod)$/) next
     exit 1
   }
-' justfile; then
+' "$tmp/justfile"; then
   fail "justfile contains an unapproved recipe command"
 fi
 
