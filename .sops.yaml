@@ -1,0 +1,8 @@
+# ores-sops is tooling, not a product secret store. This deliberately impossible
+# path rule makes root-level SOPS creation fail closed until a reviewed, real
+# environment-specific recipient policy replaces it. The committed value below
+# is a public Age recipient only; its private identity was intentionally discarded.
+creation_rules:
+  - path_regex: '^$'
+    age:
+      - age1crc66gavpq750l6qsya06yj09ldnut986yft78zjxpzlgurct97qhuerw2
