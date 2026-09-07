@@ -44,24 +44,38 @@ grep -Fxq 'result-*' "$tmp/gitignore" || fail ".gitignore must ignore result-*"
 tracked_build_output=0
 while IFS= read -r -d '' path; do
   case "$path" in
-    result|result-*) tracked_build_output=1 ;;
+    result|result-*|*/result|*/result-*) tracked_build_output=1 ;;
   esac
 done < <(git ls-tree -r -z --name-only "$candidate_tree")
 [ "$tracked_build_output" = 0 ] || fail "tracked Nix result/result-* build output found"
 
 required_recipes=(
-  default ensure-dec use-dev use-prod use-force-dev use-force-prod
+  default audit test-contract ensure-dec list-encrypted check-ignore
+  use-dev use-prod use-force-dev use-force-prod
   encrypt-dev encrypt-prod edit-dev edit-prod diff-dev diff-prod
   status refresh verify lock install-hooks check
 )
+approved_recipes=' default audit test-contract ensure-dec list-encrypted check-ignore use-dev use-prod use-force-dev use-force-prod encrypt-dev encrypt-prod edit-dev edit-prod diff-dev diff-prod status refresh verify lock install-hooks check '
+
+sed -nE 's/^([A-Za-z0-9_-]+):$/\1/p' "$tmp/justfile" >"$tmp/recipes"
 for recipe in "${required_recipes[@]}"; do
-  grep -Eq "^${recipe}:$" "$tmp/justfile" || fail "justfile is missing recipe: $recipe"
+  grep -Fxq "$recipe" "$tmp/recipes" || fail "justfile is missing recipe: $recipe"
 done
 
-# The repository Just boundary is intentionally declarative and closed: every
-# secret-adjacent operation delegates to ores-sops, while the full gate delegates
-# to the pinned Nix flake. Reject direct SOPS, ad-hoc env/dec creation, and any
-# newly introduced shell body until it receives an explicit policy update.
+while IFS= read -r recipe; do
+  case "$approved_recipes" in
+    *" $recipe "*) ;;
+    *) fail "justfile contains an unapproved recipe: $recipe" ;;
+  esac
+done <"$tmp/recipes"
+
+duplicate_recipes="$(LC_ALL=C sort "$tmp/recipes" | uniq -d)"
+[ -z "$duplicate_recipes" ] || fail "justfile contains duplicate recipe declarations"
+
+# The repository Just boundary is declarative and closed: every secret-adjacent
+# operation delegates to the tracked local helper, while the full gate delegates
+# to the pinned Nix flake. Reject direct SOPS, ad-hoc env/dec creation, PATH
+# shadowing, aliases, and newly introduced shell bodies until policy is updated.
 if grep -Eq '(^|[[:space:];|&])sops([[:space:]]|$)' "$tmp/justfile"; then
   fail "justfile must not invoke sops directly"
 fi
@@ -69,19 +83,34 @@ if grep -Eq '(mkdir|install|chmod)[^#]*env/dec' "$tmp/justfile"; then
   fail "justfile must not create or chmod env/dec directly"
 fi
 
-if ! awk '
-  /^[[:space:]]+[^#[:space:]]/ {
-    line=$0
-    sub(/^[[:space:]]+/, "", line)
-    if (line == "@just --list") next
-    if (line == "nix flake check -L") next
-    if (line ~ /^ores-sops (ensure-dec|status|refresh|verify|lock|install-hooks)$/) next
-    if (line ~ /^ores-sops (use|encrypt|edit|diff) (dev|prod)$/) next
-    if (line ~ /^ores-sops use --force (dev|prod)$/) next
-    exit 1
-  }
-' "$tmp/justfile"; then
-  fail "justfile contains an unapproved recipe command"
-fi
+while IFS= read -r raw; do
+  line="$(printf '%s\n' "$raw" | sed 's/^[[:space:]]*//')"
+  case "$line" in
+    "@just --list" | \
+    "python3 tools/audit_env_contract.py" | \
+    "python3 -m unittest discover -s test -p 'test_audit_env_contract.py' -v" | \
+    "@if [[ -d env/enc ]]; then find env/enc -type f -name '*.env.enc' -print | LC_ALL=C sort; fi" | \
+    "git check-ignore --quiet .env" | \
+    "git check-ignore --quiet env/dec/runtime.env" | \
+    "./ores-sops ensure-dec" | \
+    "./ores-sops use dev" | \
+    "./ores-sops use prod" | \
+    "./ores-sops use --force dev" | \
+    "./ores-sops use --force prod" | \
+    "./ores-sops encrypt dev" | \
+    "./ores-sops encrypt prod" | \
+    "./ores-sops edit dev" | \
+    "./ores-sops edit prod" | \
+    "./ores-sops diff dev" | \
+    "./ores-sops diff prod" | \
+    "./ores-sops status" | \
+    "./ores-sops refresh" | \
+    "./ores-sops verify" | \
+    "./ores-sops lock" | \
+    "./ores-sops install-hooks" | \
+    "nix flake check -L") ;;
+    *) fail "justfile contains an unapproved recipe command: $line" ;;
+  esac
+done < <(grep -E '^[[:space:]]+[^#[:space:]]' "$tmp/justfile" || true)
 
 printf 'ores-sops repository boundary: PASS\n'
