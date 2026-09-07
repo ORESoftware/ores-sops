@@ -49,6 +49,15 @@ while IFS= read -r -d '' path; do
 done < <(git ls-tree -r -z --name-only "$candidate_tree")
 [ "$tracked_build_output" = 0 ] || fail "tracked Nix result/result-* build output found"
 
+# Emit the most specific security diagnostics before the generic closed recipe
+# namespace. This keeps failures attributable without weakening either check.
+if grep -Eq '(^|[[:space:];|&])sops([[:space:]]|$)' "$tmp/justfile"; then
+  fail "justfile must not invoke sops directly"
+fi
+if grep -Eq '(mkdir|install|chmod)[^#]*env/dec' "$tmp/justfile"; then
+  fail "justfile must not create or chmod env/dec directly"
+fi
+
 required_recipes=(
   default audit test-contract ensure-dec list-encrypted check-ignore
   use-dev use-prod use-force-dev use-force-prod
@@ -74,15 +83,8 @@ duplicate_recipes="$(LC_ALL=C sort "$tmp/recipes" | uniq -d)"
 
 # The repository Just boundary is declarative and closed: every secret-adjacent
 # operation delegates to the tracked local helper, while the full gate delegates
-# to the pinned Nix flake. Reject direct SOPS, ad-hoc env/dec creation, PATH
-# shadowing, aliases, and newly introduced shell bodies until policy is updated.
-if grep -Eq '(^|[[:space:];|&])sops([[:space:]]|$)' "$tmp/justfile"; then
-  fail "justfile must not invoke sops directly"
-fi
-if grep -Eq '(mkdir|install|chmod)[^#]*env/dec' "$tmp/justfile"; then
-  fail "justfile must not create or chmod env/dec directly"
-fi
-
+# to the pinned Nix flake. Reject PATH shadowing, aliases, and newly introduced
+# shell bodies until policy is updated.
 while IFS= read -r raw; do
   line="$(printf '%s\n' "$raw" | sed 's/^[[:space:]]*//')"
   case "$line" in
