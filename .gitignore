@@ -17,3 +17,8 @@ result-*
 /age.key
 /age.txt
 /keys.txt
+
+# Repository-local scratch space. AI agents and developers place temporary Git
+# worktrees under /tmp/worktrees/ and remove them with `git worktree remove`.
+/tmp/
+/temp/
