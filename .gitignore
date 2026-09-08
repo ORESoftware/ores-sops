@@ -18,7 +18,9 @@ result-*
 /age.txt
 /keys.txt
 
-# Repository-local scratch space. AI agents and developers place temporary Git
-# worktrees under /tmp/worktrees/ and remove them with `git worktree remove`.
+# Repository-local scratch space; these ignores do not authorize worktrees.
+# Only with explicit human authorization, use /tmp/worktrees/ for temporary Git
+# worktrees. Inspect WIP before authorized removal via `git worktree remove`;
+# never use raw filesystem deletion or force-removal to discard another's work.
 /tmp/
 /temp/
