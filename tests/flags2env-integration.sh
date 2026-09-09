@@ -18,6 +18,9 @@ case_label() {
 safe_parser_summary() {
   # Diagnostic helper for CI: it reports only command identity and channel
   # cardinalities, never flag values, argv strings, dotenv values, or errors.
+  # The JavaScript body must remain a literal shell string: its template-literal
+  # ${...} expressions belong to Node, not Bash.
+  # shellcheck disable=SC2016
   flags2env "$@" 2>/dev/null | node -e '
     let text = "";
     process.stdin.setEncoding("utf8");
