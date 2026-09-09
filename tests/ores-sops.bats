@@ -82,10 +82,13 @@ EOF_IGNORE
   [ -z "$(find "$outside" -mindepth 1 -maxdepth 1 -print -quit)" ]
 }
 
-@test "only canonical environment names are accepted" {
-  run ores-sops use app
+@test "only canonical environment names are accepted and redacted" {
+  invalid_profile='synthetic-noncanonical-profile'
+  run ores-sops use "$invalid_profile"
   [ "$status" -ne 0 ]
-  [[ "$output" == *"unsupported environment 'app'"* ]]
+  [[ "$output" == *'"event":"argv_admission_rejected"'* ]]
+  [[ "$output" == *"command-line admission failed"* ]]
+  [[ "$output" != *"$invalid_profile"* ]]
 }
 
 @test "use decrypts atomically and creates a relative root symlink" {
