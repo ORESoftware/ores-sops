@@ -52,7 +52,10 @@ jobs:
           mkdir -p "$root"
           cd "$root"
           npm init --yes >/dev/null
-          npm install --ignore-scripts --no-save --package-lock=false \
+          # TJSV's pinned @oresoftware/f2e dependency includes the native
+          # flags2env binding used at its argv boundary. Do not suppress its
+          # audited build lifecycle or the validator cannot start.
+          npm install --no-save --package-lock=false \
             "https://github.com/ORESoftware/typespec-json-schema-validator/archive/${TJSV_REVISION}.tar.gz"
           printf 'TJSV_BIN=%s/node_modules/.bin/tjsv\n' "$root" >> "$GITHUB_ENV"
 
