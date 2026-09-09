@@ -9,6 +9,16 @@ case_label() {
   printf 'runtime-admission-case: %s\n' "$1"
 }
 
+assert_event() {
+  local expected="$1" file="$2" observed
+  if grep -Fq "\"event\":\"${expected}\"" "${file}"; then
+    return 0
+  fi
+  observed="$(grep -oE '"event":"[a-z_]+"' "${file}" | head -n 1 || true)"
+  printf 'expected telemetry event %s; observed %s\n' "${expected}" "${observed:-none}" >&2
+  return 1
+}
+
 mkdir -p "${TMP}/bin" "${TMP}/scripts"
 cp "${ROOT}/ores-sops" "${TMP}/ores-sops"
 cp "${ROOT}/scripts/ores-sops-telemetry" "${TMP}/scripts/ores-sops-telemetry"
@@ -61,7 +71,7 @@ if FLAGS2ENV_TEST_AUDIT_FAIL=1 "${TMP}/ores-sops" status >"${TMP}/out" 2>"${TMP}
   echo "expected config audit failure" >&2
   exit 1
 fi
-grep -q '"event":"config_invalid"' "${TMP}/err"
+assert_event config_invalid "${TMP}/err"
 if grep -q 'synthetic config audit detail' "${TMP}/err"; then
   echo "config audit output leaked to stderr" >&2
   exit 1
@@ -70,12 +80,15 @@ fi
 
 case_label required-env-redaction
 # Required environment admission logs the key name, never a missing/secret value.
-if ORES_SOPS_ENVIRONMENT= "${TMP}/ores-sops" use >"${TMP}/out" 2>"${TMP}/err"; then
+if ORES_SOPS_ENVIRONMENT='' "${TMP}/ores-sops" use >"${TMP}/out" 2>"${TMP}/err"; then
   echo "expected missing environment to fail" >&2
   exit 1
 fi
-grep -q '"event":"required_env_missing"' "${TMP}/err"
-grep -q '"key":"ORES_SOPS_ENVIRONMENT"' "${TMP}/err"
+assert_event required_env_missing "${TMP}/err"
+if ! grep -Fq '"key":"ORES_SOPS_ENVIRONMENT"' "${TMP}/err"; then
+  echo "required environment diagnostic did not retain the allow-listed key name" >&2
+  exit 1
+fi
 
 case_label parser-stderr-redaction
 # Parser-controlled stderr is suppressed because argv may contain credentials.
@@ -85,7 +98,7 @@ if grep -q 'synthetic-do-not-log-value' "${TMP}/err"; then
   echo "parser-controlled value leaked to stderr" >&2
   exit 1
 fi
-grep -q '"event":"argv_admission_rejected"' "${TMP}/err"
+assert_event argv_admission_rejected "${TMP}/err"
 
 case_label env-fallback-normalization
 # Environment fallback is normalized into the legacy core argv shape.
@@ -100,7 +113,7 @@ if "${TMP}/ores-sops" use dev --environment=prod >"${TMP}/out" 2>"${TMP}/err"; t
   echo "expected conflicting environments to fail" >&2
   exit 1
 fi
-grep -q '"event":"environment_conflict"' "${TMP}/err"
+assert_event environment_conflict "${TMP}/err"
 [[ ! -e "${CORE_ARGS_CAPTURE}" ]]
 
 case_label invalid-env-redaction
@@ -110,7 +123,7 @@ if ORES_SOPS_ENVIRONMENT="${invalid_profile}" "${TMP}/ores-sops" use >"${TMP}/ou
   echo "expected invalid environment to fail" >&2
   exit 1
 fi
-grep -q '"event":"invalid_environment"' "${TMP}/err"
+assert_event invalid_environment "${TMP}/err"
 if grep -Fq "${invalid_profile}" "${TMP}/err"; then
   echo "invalid environment value leaked to stderr" >&2
   exit 1
