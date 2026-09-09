@@ -30,6 +30,8 @@ model DiagnosticDetails {
   command: string;
   profile: string;
   key: string;
+  @minValue(0)
+  @maxValue(255)
   exitCode: int32;
 }
 
