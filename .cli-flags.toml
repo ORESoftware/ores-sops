@@ -1,8 +1,6 @@
-version = "1"
-cli = "ores-sops"
+# Sole public CLI option authority for ores-sops. Keep this file accepted by
+# flags2env audit; do not add a second argv parser or implicit dotenv source.
 
-# Deliberately empty: ores-sops owns decryption. flags2env must never load the
-# managed .env symlink or any env/dec plaintext as part of argv admission.
 [env]
 files = []
 
@@ -16,62 +14,76 @@ command_env = "ORES_SOPS_COMMAND"
 [commands.init]
 [commands.init.flags.with-stage]
 env = "ORES_SOPS_WITH_STAGE"
+aliases = ["with-stage"]
 type = "bool"
 default = false
 [commands.init.flags.recipient]
 env = "ORES_SOPS_RECIPIENT"
+aliases = ["recipient"]
 type = "string"
 [commands.init.flags.dev-recipient]
 env = "ORES_SOPS_DEV_RECIPIENT"
+aliases = ["dev-recipient"]
 type = "string"
 [commands.init.flags.stage-recipient]
 env = "ORES_SOPS_STAGE_RECIPIENT"
+aliases = ["stage-recipient"]
 type = "string"
 [commands.init.flags.prod-recipient]
 env = "ORES_SOPS_PROD_RECIPIENT"
+aliases = ["prod-recipient"]
 type = "string"
 [commands.init.flags.recovery-recipient]
 env = "ORES_SOPS_RECOVERY_RECIPIENT"
+aliases = ["recovery-recipient"]
 type = "string"
 
 [commands.use]
 [commands.use.flags.force]
 env = "ORES_SOPS_FORCE"
+aliases = ["force"]
 short = "f"
 type = "bool"
 default = false
 [commands.use.flags.environment]
 env = "ORES_SOPS_ENVIRONMENT"
+aliases = ["environment"]
 type = "string"
 
 [commands.refresh]
 [commands.refresh.flags.quiet]
 env = "ORES_SOPS_QUIET"
+aliases = ["quiet"]
 type = "bool"
 default = false
 
 [commands.encrypt]
 [commands.encrypt.flags.allow-empty]
 env = "ORES_SOPS_ALLOW_EMPTY"
+aliases = ["allow-empty"]
 type = "bool"
 default = false
 [commands.encrypt.flags.environment]
 env = "ORES_SOPS_ENVIRONMENT"
+aliases = ["environment"]
 type = "string"
 
 [commands.edit]
 [commands.edit.flags.environment]
 env = "ORES_SOPS_ENVIRONMENT"
+aliases = ["environment"]
 type = "string"
 
 [commands.sync-keys]
 [commands.sync-keys.flags.environment]
 env = "ORES_SOPS_ENVIRONMENT"
+aliases = ["environment"]
 type = "string"
 
 [commands.diff]
 [commands.diff.flags.environment]
 env = "ORES_SOPS_ENVIRONMENT"
+aliases = ["environment"]
 type = "string"
 
 [commands.status]
@@ -82,6 +94,7 @@ type = "string"
 [commands.install-hooks]
 [commands.install-hooks.flags.quiet]
 env = "ORES_SOPS_QUIET"
+aliases = ["quiet"]
 type = "bool"
 default = false
 
