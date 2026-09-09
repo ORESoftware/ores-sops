@@ -15,6 +15,7 @@
       "enum": [
         "core_missing",
         "config_missing",
+        "config_invalid",
         "dependency_missing",
         "argv_admission_rejected",
         "environment_conflict",
