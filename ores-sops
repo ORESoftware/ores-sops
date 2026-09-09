@@ -17,7 +17,7 @@ fail() {
   local message="$2"
   local key="${3:-}"
   local command="${4:-unknown}"
-  emit_diag error "${event}" "${message}" "${command}" "" "${key}" "2"
+  emit_diag "${event}" "${command}" "" "${key}" "2"
   printf 'ores-sops: %s\n' "${message}" >&2
   exit 2
 }
@@ -101,7 +101,7 @@ if [[ "${command_name}" =~ ^(use|encrypt|edit|sync-keys|diff)$ ]]; then
   args=("${normalized[@]}")
 fi
 
-emit_diag info command_started "ores-sops command admitted" "${command_name}" "${safe_profile}" "" "0"
+emit_diag command_started "${command_name}" "${safe_profile}" "" "0"
 
 set +e
 "${CORE}" "${args[@]}"
@@ -109,8 +109,8 @@ status=$?
 set -e
 
 if (( status == 0 )); then
-  emit_diag info command_completed "ores-sops command completed" "${command_name}" "${safe_profile}" "" "0"
+  emit_diag command_completed "${command_name}" "${safe_profile}" "" "0"
 else
-  emit_diag error command_failed "ores-sops command failed" "${command_name}" "${safe_profile}" "" "${status}"
+  emit_diag command_failed "${command_name}" "${safe_profile}" "" "${status}"
 fi
 exit "${status}"
