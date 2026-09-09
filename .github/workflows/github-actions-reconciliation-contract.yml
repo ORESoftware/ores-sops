@@ -57,16 +57,21 @@ jobs:
           # audited build lifecycle or the validator cannot start.
           npm install --no-save --package-lock=false \
             "https://github.com/ORESoftware/typespec-json-schema-validator/archive/${TJSV_REVISION}.tar.gz"
+          # TypeSpec resolves libraries relative to the authored .tsp file.
+          # Keep the repo clean while colocating a copy of the independent
+          # contract beneath the exact validator's node_modules ancestry.
+          cp -R "$GITHUB_WORKSPACE/contracts/github-actions-reconciliation" "$root/contract"
           printf 'TJSV_BIN=%s/node_modules/.bin/tjsv\n' "$root" >> "$GITHUB_ENV"
+          printf 'TJSV_CONTRACT_ROOT=%s/contract\n' "$root" >> "$GITHUB_ENV"
 
       - name: Require TypeSpec and authored Draft 2020-12 parity
         shell: bash
         run: |
           set -euo pipefail
           "$TJSV_BIN" check \
-            --typespec=contracts/github-actions-reconciliation/main.tsp \
-            --schema=contracts/github-actions-reconciliation/authored.schema.json \
-            --instances=contracts/github-actions-reconciliation/instances \
+            --typespec="$TJSV_CONTRACT_ROOT/main.tsp" \
+            --schema="$TJSV_CONTRACT_ROOT/authored.schema.json" \
+            --instances="$TJSV_CONTRACT_ROOT/instances" \
             --report="${RUNNER_TEMP}/github-actions-reconciliation.tjsv.json" \
             --quiet
 
@@ -75,18 +80,18 @@ jobs:
         run: |
           set -euo pipefail
           drift="${RUNNER_TEMP}/authored.drift.schema.json"
-          node --input-type=module - "$drift" <<'NODE'
+          TJSV_CONTRACT_ROOT="$TJSV_CONTRACT_ROOT" node --input-type=module - "$drift" <<'NODE'
           import fs from 'node:fs';
           const output = process.argv[2];
-          const schema = JSON.parse(fs.readFileSync('contracts/github-actions-reconciliation/authored.schema.json', 'utf8'));
+          const schema = JSON.parse(fs.readFileSync(`${process.env.TJSV_CONTRACT_ROOT}/authored.schema.json`, 'utf8'));
           schema.$defs.EnvironmentName.enum = ['dev', 'stage', 'production'];
           fs.writeFileSync(output, `${JSON.stringify(schema, null, 2)}\n`);
           NODE
           set +e
           "$TJSV_BIN" check \
-            --typespec=contracts/github-actions-reconciliation/main.tsp \
+            --typespec="$TJSV_CONTRACT_ROOT/main.tsp" \
             --schema="$drift" \
-            --instances=contracts/github-actions-reconciliation/instances \
+            --instances="$TJSV_CONTRACT_ROOT/instances" \
             --quiet
           status=$?
           set -e
