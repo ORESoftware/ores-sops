@@ -25,7 +25,20 @@ if [[ "${FLAGS2ENV_TEST_FAIL:-0}" == "1" ]]; then
   printf 'unsafe parser echo: %s\n' "${SYNTHETIC_SECRET_ARG:-not-set}" >&2
   exit 2
 fi
-printf '{"ORES_SOPS_UNKNOWN_OPTIONS":"[]","ORES_SOPS_PARSE_ERRORS":"[]"}\n'
+command_name=""
+for token in "$@"; do
+  case "${token}" in
+    init|use|refresh|encrypt|edit|sync-keys|diff|status|lock|verify|precommit|install-hooks|help|version)
+      command_name="${token}"
+      break
+      ;;
+  esac
+done
+if [[ "${FLAGS2ENV_TEST_MISSING_CHANNEL:-0}" == "1" ]]; then
+  printf '{"ORES_SOPS_UNKNOWN_OPTIONS":"[]","ORES_SOPS_PARSE_ERRORS":"[]","ORES_SOPS_COMMAND":"%s"}\n' "${command_name}"
+else
+  printf '{"ORES_SOPS_UNKNOWN_OPTIONS":"[]","ORES_SOPS_PARSE_ERRORS":"[]","ORES_SOPS_POSITIONALS":"[]","ORES_SOPS_COMMAND":"%s"}\n' "${command_name}"
+fi
 EOF
 chmod +x "${TMP}/bin/flags2env"
 
@@ -51,6 +64,13 @@ if grep -q 'synthetic config audit detail' "${TMP}/err"; then
   exit 1
 fi
 [[ ! -e "${CORE_ARGS_CAPTURE}" ]]
+
+# Missing structured parser channels are an incompatible parser and fail closed.
+if FLAGS2ENV_TEST_MISSING_CHANNEL=1 "${TMP}/ores-sops" status >"${TMP}/out" 2>"${TMP}/err"; then
+  echo "expected missing parser channel to fail" >&2
+  exit 1
+fi
+grep -q '"event":"argv_admission_rejected"' "${TMP}/err"
 
 # Required environment admission logs the key name, never a missing/secret value.
 if ORES_SOPS_ENVIRONMENT= "${TMP}/ores-sops" use >"${TMP}/out" 2>"${TMP}/err"; then
