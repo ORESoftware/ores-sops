@@ -27,7 +27,7 @@ fail() {
 
 command_name="${1:-help}"
 case "${command_name}" in
-  init|use|refresh|encrypt|edit|sync-keys|diff|status|lock|verify|precommit|install-hooks|help|version) ;;
+  init|use|refresh|encrypt|edit|sync-keys|diff|status|lock|verify|precommit|ensure-dec|install-hooks|help|version) ;;
   -h|--help) command_name="help" ;;
   -V|--version) command_name="version" ;;
   *) command_name="unknown" ;;
@@ -157,8 +157,14 @@ if [[ "${command_name}" =~ ^(use|encrypt|edit|sync-keys|diff)$ ]]; then
           fail environment_conflict "environment was supplied more than once with conflicting values" "ORES_SOPS_ENVIRONMENT" "${command_name}"
         safe_profile="${arg}"
         ;;
-      *)
+      -*)
         normalized+=("${arg}")
+        ;;
+      *)
+        # Positional profile values are public input. Reject noncanonical values
+        # without reflecting them into stderr or telemetry, even if a parser
+        # implementation omits that positional from its closed JSON channel.
+        fail argv_admission_rejected "command-line admission failed" "" "${command_name}"
         ;;
     esac
     i=$((i + 1))
