@@ -43,7 +43,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Enforce independent TypeSpec and JSON Schema authorities with TJSV
-        uses: ORESoftware/typespec-json-schema-validator@a4b731fbf82c4d162abd74fd03758fa32bb76176
+        uses: ORESoftware/typespec-json-schema-validator@f8b68ccc9d88fbe3843106b8d79fd9e1dbac3256
         with:
           typespec: contracts/main.tsp
           schema: contracts/authored.schema.json
