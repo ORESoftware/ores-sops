@@ -46,23 +46,23 @@ if ! (cd "${SCRIPT_DIR}" && flags2env audit "${CONFIG}" >/dev/null 2>&1); then
   fail config_invalid ".cli-flags.toml admission audit failed" "" "${command_name}"
 fi
 
-# Normalize top-level help/version aliases so flags2env emits its structured JSON
-# rather than rendering a help table. No other argv is rewritten here.
+# Normalize help/version aliases only for admission so flags2env emits its JSON
+# channels rather than a help table. The legacy core still receives public argv.
 admission_args=("$0" "$@")
 case "${1:-}" in
-  -h|--help) admission_args=("$0" help) ;;
+  ""|-h|--help) admission_args=("$0" help) ;;
   -V|--version) admission_args=("$0" version) ;;
 esac
 
-# Parse the real argv through flags2env and consume only its closed unknown/error
-# channels. Parser stdout is piped directly into a bounded JSON checker; it is
-# never eval'd, exported, logged, written to disk, or placed on another process'
-# argv. Parser stderr is suppressed because it may reflect attacker-controlled
-# command-line input.
+# Parse the real argv through flags2env and consume only its closed command,
+# unknown-option, parse-error, and positional channels. Parser stdout is piped
+# directly into a bounded JSON checker; it is never eval'd, exported, logged,
+# written to disk, or placed on another process' argv. Parser stderr is
+# suppressed because it may reflect attacker-controlled command-line input.
 if ! (
   cd "${SCRIPT_DIR}"
   flags2env "${admission_args[@]}" 2>/dev/null |
-    node -e '
+    ORES_SOPS_EXPECTED_COMMAND="${command_name}" node -e '
       let text = "";
       process.stdin.setEncoding("utf8");
       process.stdin.on("data", (chunk) => {
@@ -73,14 +73,35 @@ if ! (
         try {
           const parsed = JSON.parse(text);
           const decodeList = (key) => {
-            const raw = parsed[key] ?? "[]";
+            const raw = parsed[key];
             if (typeof raw !== "string") return null;
             const value = JSON.parse(raw);
-            return Array.isArray(value) ? value : null;
+            return Array.isArray(value) && value.every((item) => typeof item === "string")
+              ? value
+              : null;
           };
           const unknown = decodeList("ORES_SOPS_UNKNOWN_OPTIONS");
           const errors = decodeList("ORES_SOPS_PARSE_ERRORS");
-          if (!unknown || !errors || unknown.length !== 0 || errors.length !== 0) {
+          const positionals = decodeList("ORES_SOPS_POSITIONALS");
+          const command = parsed.ORES_SOPS_COMMAND;
+          const expected = process.env.ORES_SOPS_EXPECTED_COMMAND;
+          if (
+            !unknown || !errors || !positionals ||
+            unknown.length !== 0 || errors.length !== 0 ||
+            typeof command !== "string" || command !== expected
+          ) {
+            process.exit(2);
+            return;
+          }
+
+          const profileCommands = new Set(["use", "encrypt", "edit", "sync-keys", "diff"]);
+          if (profileCommands.has(command)) {
+            if (positionals.length > 1) process.exit(2);
+            if (
+              positionals.length === 1 &&
+              !["dev", "stage", "prod"].includes(positionals[0])
+            ) process.exit(2);
+          } else if (positionals.length !== 0) {
             process.exit(2);
           }
         } catch {
@@ -97,7 +118,6 @@ fi
 
 args=("$@")
 safe_profile=""
-profile_source=""
 normalized=()
 
 if [[ "${command_name}" =~ ^(use|encrypt|edit|sync-keys|diff)$ ]]; then
@@ -111,7 +131,6 @@ if [[ "${command_name}" =~ ^(use|encrypt|edit|sync-keys|diff)$ ]]; then
         [[ -z "${safe_profile}" || "${safe_profile}" == "${candidate}" ]] || \
           fail environment_conflict "environment was supplied more than once with conflicting values" "ORES_SOPS_ENVIRONMENT" "${command_name}"
         safe_profile="${candidate}"
-        profile_source="flag"
         ;;
       --environment)
         (( i + 1 < ${#args[@]} )) || fail required_env_missing "required environment is missing" "ORES_SOPS_ENVIRONMENT" "${command_name}"
@@ -120,13 +139,11 @@ if [[ "${command_name}" =~ ^(use|encrypt|edit|sync-keys|diff)$ ]]; then
         [[ -z "${safe_profile}" || "${safe_profile}" == "${candidate}" ]] || \
           fail environment_conflict "environment was supplied more than once with conflicting values" "ORES_SOPS_ENVIRONMENT" "${command_name}"
         safe_profile="${candidate}"
-        profile_source="flag"
         ;;
       dev|stage|prod)
         [[ -z "${safe_profile}" || "${safe_profile}" == "${arg}" ]] || \
           fail environment_conflict "environment was supplied more than once with conflicting values" "ORES_SOPS_ENVIRONMENT" "${command_name}"
         safe_profile="${arg}"
-        profile_source="positional"
         ;;
       *)
         normalized+=("${arg}")
@@ -140,7 +157,6 @@ if [[ "${command_name}" =~ ^(use|encrypt|edit|sync-keys|diff)$ ]]; then
       fail required_env_missing "required environment is missing" "ORES_SOPS_ENVIRONMENT" "${command_name}"
     fi
     safe_profile="${ORES_SOPS_ENVIRONMENT}"
-    profile_source="env"
   fi
 
   case "${safe_profile}" in
