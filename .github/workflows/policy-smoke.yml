@@ -106,7 +106,11 @@ jobs:
               echo 'expected unsupported environment to fail' >&2
               exit 1
             fi
-            grep -q "unsupported environment 'app'" /tmp/ores-sops-app.out
+            grep -q '"event":"argv_admission_rejected"' /tmp/ores-sops-app.out
+            if grep -Fq 'app' /tmp/ores-sops-app.out; then
+              echo 'invalid profile operand leaked past admission redaction' >&2
+              exit 1
+            fi
           )
 
       - name: Scoped dev stage prod policy smoke
@@ -158,7 +162,11 @@ jobs:
               echo 'expected staging alias to fail' >&2
               exit 1
             fi
-            grep -q "unsupported environment 'staging'" /tmp/ores-sops-staging.out
+            grep -q '"event":"argv_admission_rejected"' /tmp/ores-sops-staging.out
+            if grep -Fq 'staging' /tmp/ores-sops-staging.out; then
+              echo 'invalid profile alias leaked past admission redaction' >&2
+              exit 1
+            fi
           )
 
   full-nix:
