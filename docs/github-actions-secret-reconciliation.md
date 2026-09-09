@@ -14,7 +14,7 @@ The resolver applies this fixed order, regardless of caller order:
 6. GitHub repository variable
 7. GitHub organization variable
 
-Only values explicitly delivered to the workflow can become fallback values. The GitHub REST API can enumerate Actions secret **names and metadata**, but GitHub never returns secret values. API inventory therefore contributes observations, not secret values.
+Only values explicitly delivered to the workflow can become fallback values. The GitHub REST API can enumerate Actions secret **names and metadata**, but GitHub never returns secret values. API inventory therefore contributes observations, not secret values. GitHub Actions variables are readable through the API, but the inventory helper deliberately discards their values too so receipts and telemetry use one value-blind evidence model.
 
 A GitHub key absent from `env/enc` produces a value-blind `next-loggers/v1` warning record for the `github.com/ores-otel` pipeline. The record includes the repository, environment, key name, GitHub source class, and reason `missing_from_env_enc`. It must never include the value, ciphertext, value length, prefix, hash, or any other value-derived metadata.
 
@@ -22,12 +22,25 @@ A GitHub key absent from `env/enc` produces a value-blind `next-loggers/v1` warn
 
 1. Decrypt the selected canonical SOPS file through the normal `ores-sops` lifecycle into a private temporary file or `env/dec/<environment>.env`.
 2. Materialize only explicitly declared GitHub fallback values into private temporary dotenv files. Do not attempt to download secret values through the REST API; that API does not provide them.
-3. Build an inventory containing GitHub secret/variable **names** and source classes.
+3. Run `scripts/inventory-github-actions-config.mjs` to query GitHub Actions configuration names with `gh api` and write a private `0600` inventory containing only `{key, source}` entries.
 4. Run `scripts/run-github-actions-reconciliation.mjs` (or the composite action in `actions/github-actions-reconcile`).
 5. Consume the generated resolved dotenv file. Its mode is `0600`; `env/enc` values have overwritten same-name GitHub fallbacks.
 6. Send the generated JSONL records into the existing `github.com/ores-otel` log/OTLP path. The records use the canonical `next-loggers/v1` envelope.
 
-The runner accepts no command-line options. Its only bootstrap input is `ORES_SOPS_GHA_RECONCILE_INPUT`, which points at a JSON manifest. This avoids a parallel argv parser and keeps secret values out of command arguments.
+The runners accept no command-line options. Their bootstrap inputs are environment variables pointing at manifests/output files. This avoids a parallel argv parser and keeps secret values out of command arguments.
+
+### Read-only GitHub API inventory
+
+Repository secrets and variables are always inventoried. Set `ORES_SOPS_GHA_ENVIRONMENT=dev|stage|prod` to additionally inventory that GitHub environment. Organization-level inventory is opt-in because it requires organization permissions; set `ORES_SOPS_GHA_INCLUDE_ORGANIZATION=1` only for an organization-owned repository when the authenticated identity is authorized.
+
+```text
+ORES_SOPS_GHA_REPOSITORY=owner/repo
+ORES_SOPS_GHA_ENVIRONMENT=prod
+ORES_SOPS_GHA_INVENTORY_FILE=/runner/private/github-inventory.json
+node scripts/inventory-github-actions-config.mjs
+```
+
+The helper calls the GitHub Actions secrets/variables REST endpoints through `gh api --paginate --slurp`. Secret values are unavailable by API design. Variable endpoint responses do contain values, but the helper immediately reduces every item to its name and source class. It suppresses `gh` stderr on API failure so provider responses are not copied into CI logs.
 
 Example manifest (paths only):
 
