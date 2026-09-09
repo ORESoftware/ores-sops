@@ -13,13 +13,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Shell syntax
+      - name: Shell syntax and executable boundary
         run: |
           bash -n ores-sops
           bash -n scripts/ores-sops-core
           bash -n scripts/ores-sops-telemetry
           bash -n tests/runtime-admission.sh
           bash -n tests/flags2env-integration.sh
+          test -x ores-sops
+          test -x scripts/ores-sops-core
+          test -x scripts/ores-sops-telemetry
       - name: Runtime admission and telemetry redaction
         run: bash tests/runtime-admission.sh
 
