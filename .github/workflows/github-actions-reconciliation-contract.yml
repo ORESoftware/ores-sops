@@ -1,0 +1,121 @@
+name: GitHub Actions reconciliation contract
+
+on:
+  pull_request:
+    paths:
+      - 'actions/github-actions-reconcile/**'
+      - 'contracts/github-actions-reconciliation/**'
+      - 'scripts/github-actions-reconciliation.mjs'
+      - 'scripts/run-github-actions-reconciliation.mjs'
+      - 'scripts/push-github-actions-fallbacks.mjs'
+      - 'tests/github-actions-reconciliation.test.mjs'
+      - '.github/workflows/github-actions-reconciliation-contract.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'actions/github-actions-reconcile/**'
+      - 'contracts/github-actions-reconciliation/**'
+      - 'scripts/github-actions-reconciliation.mjs'
+      - 'scripts/run-github-actions-reconciliation.mjs'
+      - 'scripts/push-github-actions-fallbacks.mjs'
+      - 'tests/github-actions-reconciliation.test.mjs'
+      - '.github/workflows/github-actions-reconciliation-contract.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  reconcile-and-contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node 22
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22.16.0'
+
+      - name: Run reconciliation adversarial tests
+        run: node --test tests/github-actions-reconciliation.test.mjs
+
+      - name: Install exact TJSV contract checker
+        shell: bash
+        env:
+          TJSV_REVISION: a4b731fbf82c4d162abd74fd03758fa32bb76176
+        run: |
+          set -euo pipefail
+          root="${RUNNER_TEMP}/tjsv"
+          mkdir -p "$root"
+          cd "$root"
+          npm init --yes >/dev/null
+          npm install --ignore-scripts --no-save --package-lock=false \
+            "https://github.com/ORESoftware/typespec-json-schema-validator/archive/${TJSV_REVISION}.tar.gz"
+          printf 'TJSV_BIN=%s/node_modules/.bin/tjsv\n' "$root" >> "$GITHUB_ENV"
+
+      - name: Require TypeSpec and authored Draft 2020-12 parity
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$TJSV_BIN" check \
+            --typespec=contracts/github-actions-reconciliation/main.tsp \
+            --schema=contracts/github-actions-reconciliation/authored.schema.json \
+            --instances=contracts/github-actions-reconciliation/instances \
+            --report="${RUNNER_TEMP}/github-actions-reconciliation.tjsv.json" \
+            --quiet
+
+      - name: Prove TJSV fails closed on intentional schema drift
+        shell: bash
+        run: |
+          set -euo pipefail
+          drift="${RUNNER_TEMP}/authored.drift.schema.json"
+          node --input-type=module - "$drift" <<'NODE'
+          import fs from 'node:fs';
+          const output = process.argv[2];
+          const schema = JSON.parse(fs.readFileSync('contracts/github-actions-reconciliation/authored.schema.json', 'utf8'));
+          schema.$defs.EnvironmentName.enum = ['dev', 'stage', 'production'];
+          fs.writeFileSync(output, `${JSON.stringify(schema, null, 2)}\n`);
+          NODE
+          set +e
+          "$TJSV_BIN" check \
+            --typespec=contracts/github-actions-reconciliation/main.tsp \
+            --schema="$drift" \
+            --instances=contracts/github-actions-reconciliation/instances \
+            --quiet
+          status=$?
+          set -e
+          test "$status" -eq 2 || {
+            echo "::error::intentional TJSV drift must stop for evaluation with exit 2; got $status"
+            exit 1
+          }
+
+      - name: Check exact ores-otel wire-envelope compatibility
+        shell: bash
+        env:
+          ORES_OTEL_REVISION: 20b296e817a04dfc4eb0515635ce036d8f4e984e
+        run: |
+          set -euo pipefail
+          schema="${RUNNER_TEMP}/ores-otel-log-record.schema.json"
+          curl --proto '=https' --tlsv1.2 --fail --location --silent --show-error \
+            "https://raw.githubusercontent.com/ores-otel/ores.otel.log/${ORES_OTEL_REVISION}/contracts/log-record.schema.json" \
+            --output "$schema"
+          ORES_OTEL_LOG_RECORD_SCHEMA="$schema" node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import assert from 'node:assert/strict';
+          import { createOresOtelFallbackRecords, reconcileGitHubActionsEnvironment } from './scripts/github-actions-reconciliation.mjs';
+          const schema = JSON.parse(fs.readFileSync(process.env.ORES_OTEL_LOG_RECORD_SCHEMA, 'utf8'));
+          const { receipt } = reconcileGitHubActionsEnvironment({
+            repository: 'ORESoftware/example',
+            environment: 'prod',
+            authoritative: {},
+            inventory: [{ key: 'GITHUB_ONLY', source: 'github_repository_secret' }],
+          });
+          const record = createOresOtelFallbackRecords(receipt, { timestamp: '2026-09-09T20:00:00.000Z' })[0];
+          assert.equal(record.schema, schema.properties.schema.const);
+          for (const key of schema.required) assert.ok(Object.hasOwn(record, key), `missing ores-otel required field ${key}`);
+          for (const key of Object.keys(record)) assert.ok(Object.hasOwn(schema.properties, key), `unknown ores-otel field ${key}`);
+          assert.equal(JSON.stringify(record).includes('secret-value'), false);
+          NODE
