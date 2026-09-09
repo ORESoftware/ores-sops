@@ -1,0 +1,13 @@
+{
+  "schema": "ores.sops/diagnostic/v1",
+  "level": "error",
+  "component": "ores-sops",
+  "event": "required_env_missing",
+  "message": "required environment is missing",
+  "details": {
+    "command": "use",
+    "profile": "",
+    "key": "ORES_SOPS_ENVIRONMENT",
+    "exitCode": 2
+  }
+}
