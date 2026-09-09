@@ -43,6 +43,10 @@ unset ORES_SOPS_ENVIRONMENT || true
 grep -q '^use --force stage$' "${CORE_ARGS_CAPTURE}"
 grep -q '"event":"command_completed"' "${TMP}/err"
 
+# Positional environment remains a supported public form.
+"${TMP}/ores-sops" use dev --force >"${TMP}/out" 2>"${TMP}/err"
+grep -q '^use --force dev$' "${CORE_ARGS_CAPTURE}"
+
 # Unknown flags must be rejected by the real flags2env unknown-options channel.
 rm -f "${CORE_ARGS_CAPTURE}"
 if "${TMP}/ores-sops" use dev --synthetic-unknown-option >"${TMP}/out" 2>"${TMP}/err"; then
@@ -63,10 +67,39 @@ if "${TMP}/ores-sops" use dev --force=definitely-not-a-bool >"${TMP}/out" 2>"${T
 fi
 grep -q '"event":"argv_admission_rejected"' "${TMP}/err"
 
+# Extra operands are not unknown options; the positionals channel must reject
+# them rather than relying on the legacy core to notice or ignore them.
+rm -f "${CORE_ARGS_CAPTURE}"
+if "${TMP}/ores-sops" status synthetic-extra-operand >"${TMP}/out" 2>"${TMP}/err"; then
+  echo "expected extra positional operand to fail" >&2
+  exit 1
+fi
+grep -q '"event":"argv_admission_rejected"' "${TMP}/err"
+[[ ! -e "${CORE_ARGS_CAPTURE}" ]]
+if grep -q 'synthetic-extra-operand' "${TMP}/err"; then
+  echo "extra operand leaked to wrapper stderr" >&2
+  exit 1
+fi
+
+# A bare -- must not create a bypass around strict admission.
+if "${TMP}/ores-sops" status -- --synthetic-after-dashdash >"${TMP}/out" 2>"${TMP}/err"; then
+  echo "expected operand after bare -- to fail" >&2
+  exit 1
+fi
+grep -q '"event":"argv_admission_rejected"' "${TMP}/err"
+if grep -q 'synthetic-after-dashdash' "${TMP}/err"; then
+  echo "post-dashdash operand leaked to wrapper stderr" >&2
+  exit 1
+fi
+
 # Top-level aliases are normalized only for admission; the core still receives
 # the original public argv so legacy behavior remains intact.
 "${TMP}/ores-sops" --help >"${TMP}/out" 2>"${TMP}/err"
 grep -q '^--help$' "${CORE_ARGS_CAPTURE}"
+"${TMP}/ores-sops" --version >"${TMP}/out" 2>"${TMP}/err"
+grep -q '^--version$' "${CORE_ARGS_CAPTURE}"
+"${TMP}/ores-sops" >"${TMP}/out" 2>"${TMP}/err"
+[[ ! -s "${CORE_ARGS_CAPTURE}" ]]
 
 # Process-env fallback remains explicit; the local .env sentinel must not become
 # the wrapper's environment source when ORES_SOPS_ENVIRONMENT is unset.
