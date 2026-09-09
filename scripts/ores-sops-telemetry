@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+[[ "${ORES_SOPS_TELEMETRY:-1}" == "0" ]] && exit 0
+
+level="${1:-error}"
+event="${2:-unknown}"
+message="${3:-ores-sops diagnostic}"
+command_name="${4:-unknown}"
+profile="${5:-}"
+key_name="${6:-}"
+exit_code="${7:-0}"
+
+case "${level}" in info|warn|error) ;; *) level="error" ;; esac
+case "${command_name}" in
+  init|use|refresh|encrypt|edit|sync-keys|diff|status|lock|verify|precommit|install-hooks|help|version|unknown) ;;
+  *) command_name="unknown" ;;
+esac
+case "${profile}" in ""|dev|stage|prod) ;; *) profile="" ;; esac
+case "${key_name}" in
+  ""|ORES_SOPS_ENVIRONMENT|flags2env) ;;
+  *) key_name="redacted-key-name" ;;
+esac
+[[ "${exit_code}" =~ ^[0-9]{1,3}$ ]] || exit_code="1"
+
+json_escape() {
+  local s="$1"
+  s=${s//\\/\\\\}
+  s=${s//\"/\\\"}
+  s=${s//$'\n'/\\n}
+  s=${s//$'\r'/\\r}
+  s=${s//$'\t'/\\t}
+  printf '%s' "${s}"
+}
+
+printf '{"schema":"ores.sops/diagnostic/v1","level":"%s","component":"ores-sops","event":"%s","message":"%s","details":{"command":"%s","profile":"%s","key":"%s","exitCode":%s}}\n' \
+  "$(json_escape "${level}")" \
+  "$(json_escape "${event}")" \
+  "$(json_escape "${message}")" \
+  "$(json_escape "${command_name}")" \
+  "$(json_escape "${profile}")" \
+  "$(json_escape "${key_name}")" \
+  "${exit_code}" >&2
