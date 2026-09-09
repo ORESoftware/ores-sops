@@ -34,8 +34,9 @@ for token in "$@"; do
       ;;
   esac
 done
-# Canonical flags2env omits configured list channels when their lists are empty.
-printf '{"ORES_SOPS_COMMAND":"%s"}\n' "${command_name}"
+# Canonical flat CLI parsing tracks two fixed leading program/wrapper
+# positionals and omits empty unknown/error channels.
+printf '{"ORES_SOPS_POSITIONALS":"[\"flags2env\",\"ores-sops\"]","ORES_SOPS_COMMAND":"%s"}\n' "${command_name}"
 EOF
 chmod +x "${TMP}/bin/flags2env"
 
