@@ -1,1034 +1,201 @@
 #!/usr/bin/env bash
-# ores-sops — enforce the ORESoftware SOPS dotenv repository contract.
-#
-# Tracked sources of truth:
-#   env/enc/dev.env.enc
-#   env/enc/stage.env.enc   # optional, exact v0.4 contract
-#   env/enc/prod.env.enc
-#
-# Local plaintext:
-#   env/dec/dev.env
-#   env/dec/stage.env
-#   env/dec/prod.env
-#   .env -> env/dec/<dev|stage|prod>.env
-#
-# SOPS cannot infer dotenv from the .enc suffix, so every SOPS operation uses
-# explicit dotenv input/output types.
-
 set -euo pipefail
 
-VERSION="0.4.0"
-DOTENV=(--input-type dotenv --output-type dotenv)
-ALL_ENVIRONMENTS=(dev stage prod)
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)"
+CORE="${SCRIPT_DIR}/scripts/ores-sops-core"
+CONFIG="${SCRIPT_DIR}/.cli-flags.toml"
+TELEMETRY="${SCRIPT_DIR}/scripts/ores-sops-telemetry"
+
+emit_diag() {
+  if [[ -x "${TELEMETRY}" ]]; then
+    "${TELEMETRY}" "$@" || true
+  fi
+}
 
 fail() {
-  printf 'ores-sops: %s\n' "$*" >&2
-  exit 1
+  local event="$1"
+  local message="$2"
+  local key="${3:-}"
+  local command="${4:-unknown}"
+  emit_diag "${event}" "${command}" "" "${key}" "2"
+  printf 'ores-sops: %s\n' "${message}" >&2
+  exit 2
 }
 
-repo_root() {
-  git rev-parse --show-toplevel 2>/dev/null || fail "not inside a git repository"
-}
+[[ -x "${CORE}" ]] || fail core_missing "internal core executable is missing"
+[[ -f "${CONFIG}" ]] || fail config_missing ".cli-flags.toml is missing"
 
-log_path() {
-  printf '%q' "$1"
-}
+command_name="${1:-help}"
+case "${command_name}" in
+  init|use|refresh|encrypt|edit|sync-keys|diff|status|lock|verify|precommit|ensure-dec|install-hooks|help|version) ;;
+  -h|--help) command_name="help" ;;
+  -V|--version) command_name="version" ;;
+  *) command_name="unknown" ;;
+esac
 
-need_env() {
-  case "${1:-}" in
+if ! command -v flags2env >/dev/null 2>&1; then
+  fail dependency_missing "required dependency flags2env is not available" "flags2env" "${command_name}"
+fi
+if ! command -v node >/dev/null 2>&1; then
+  fail dependency_missing "required dependency node is not available" "node" "${command_name}"
+fi
+
+# The repository-root contract must itself be admissible before parsing argv.
+# Suppress audit output: diagnostics report only the fixed failure class.
+if ! (cd "${SCRIPT_DIR}" && flags2env audit "${CONFIG}" >/dev/null 2>&1); then
+  fail config_invalid ".cli-flags.toml admission audit failed" "" "${command_name}"
+fi
+
+# Normalize help/version aliases only for admission so flags2env emits its JSON
+# channels rather than a help table. The legacy core still receives public argv.
+admission_args=("$0" "$@")
+case "${1:-}" in
+  ""|-h|--help) admission_args=("$0" help) ;;
+  -V|--version) admission_args=("$0" version) ;;
+esac
+
+# Parse the real argv through flags2env and consume only its closed command,
+# unknown-option, parse-error, and positional channels. Parser stdout is piped
+# directly into a bounded JSON checker; it is never eval'd, exported, logged,
+# written to disk, or placed on another process' argv. Parser stderr is
+# suppressed because it may reflect attacker-controlled command-line input.
+if ! (
+  cd "${SCRIPT_DIR}"
+  flags2env "${admission_args[@]}" 2>/dev/null |
+    ORES_SOPS_EXPECTED_COMMAND="${command_name}" node -e '
+      let text = "";
+      process.stdin.setEncoding("utf8");
+      process.stdin.on("data", (chunk) => {
+        text += chunk;
+        if (text.length > 262144) process.exit(2);
+      });
+      process.stdin.on("end", () => {
+        try {
+          const parsed = JSON.parse(text);
+          const decodeList = (key) => {
+            // Canonical flags2env emits configured list channels only when
+            // they contain entries. Absence therefore means an empty list.
+            if (parsed[key] === undefined) return [];
+            const raw = parsed[key];
+            if (typeof raw !== "string") return null;
+            const value = JSON.parse(raw);
+            return Array.isArray(value) && value.every((item) => typeof item === "string")
+              ? value
+              : null;
+          };
+          const unknown = decodeList("ORES_SOPS_UNKNOWN_OPTIONS");
+          const errors = decodeList("ORES_SOPS_PARSE_ERRORS");
+          const positionals = decodeList("ORES_SOPS_POSITIONALS");
+          const command = parsed.ORES_SOPS_COMMAND;
+          const expected = process.env.ORES_SOPS_EXPECTED_COMMAND;
+          if (
+            !unknown || !errors || !positionals ||
+            unknown.length !== 0 || errors.length !== 0 ||
+            typeof command !== "string" || command !== expected
+          ) {
+            process.exit(2);
+            return;
+          }
+
+          // The Node CLI prepends its own executable path, and ores-sops passes
+          // its wrapper path as the next fixed token. flags2env deliberately
+          // tracks both leading wrapper/program positionals even though they do
+          // not participate in command selection. They are not user operands.
+          if (positionals.length < 2) {
+            process.exit(2);
+            return;
+          }
+          const operands = positionals.slice(2);
+          const profileCommands = new Set(["use", "encrypt", "edit", "sync-keys", "diff"]);
+          if (profileCommands.has(command)) {
+            if (operands.length > 1) process.exit(2);
+            if (
+              operands.length === 1 &&
+              !["dev", "stage", "prod"].includes(operands[0])
+            ) process.exit(2);
+          } else if (operands.length !== 0) {
+            process.exit(2);
+          }
+        } catch {
+          process.exit(2);
+        }
+      });
+    ' 2>/dev/null
+); then
+  fail argv_admission_rejected "command-line admission failed" "" "${command_name}"
+fi
+
+[[ "${command_name}" != "unknown" ]] || \
+  fail argv_admission_rejected "unknown command" "" "unknown"
+
+args=("$@")
+safe_profile=""
+normalized=()
+
+if [[ "${command_name}" =~ ^(use|encrypt|edit|sync-keys|diff)$ ]]; then
+  normalized+=("${args[0]}")
+  i=1
+  while (( i < ${#args[@]} )); do
+    arg="${args[$i]}"
+    case "${arg}" in
+      --environment=*)
+        candidate="${arg#--environment=}"
+        [[ -z "${safe_profile}" || "${safe_profile}" == "${candidate}" ]] || \
+          fail environment_conflict "environment was supplied more than once with conflicting values" "ORES_SOPS_ENVIRONMENT" "${command_name}"
+        safe_profile="${candidate}"
+        ;;
+      --environment)
+        (( i + 1 < ${#args[@]} )) || fail required_env_missing "required environment is missing" "ORES_SOPS_ENVIRONMENT" "${command_name}"
+        i=$((i + 1))
+        candidate="${args[$i]}"
+        [[ -z "${safe_profile}" || "${safe_profile}" == "${candidate}" ]] || \
+          fail environment_conflict "environment was supplied more than once with conflicting values" "ORES_SOPS_ENVIRONMENT" "${command_name}"
+        safe_profile="${candidate}"
+        ;;
+      dev|stage|prod)
+        [[ -z "${safe_profile}" || "${safe_profile}" == "${arg}" ]] || \
+          fail environment_conflict "environment was supplied more than once with conflicting values" "ORES_SOPS_ENVIRONMENT" "${command_name}"
+        safe_profile="${arg}"
+        ;;
+      -*)
+        normalized+=("${arg}")
+        ;;
+      *)
+        # Positional profile values are public input. Reject noncanonical values
+        # without reflecting them into stderr or telemetry, even if a parser
+        # implementation omits that positional from its closed JSON channel.
+        fail argv_admission_rejected "command-line admission failed" "" "${command_name}"
+        ;;
+    esac
+    i=$((i + 1))
+  done
+
+  if [[ -z "${safe_profile}" ]]; then
+    if [[ -z "${ORES_SOPS_ENVIRONMENT:-}" ]]; then
+      fail required_env_missing "required environment is missing" "ORES_SOPS_ENVIRONMENT" "${command_name}"
+    fi
+    safe_profile="${ORES_SOPS_ENVIRONMENT}"
+  fi
+
+  case "${safe_profile}" in
     dev|stage|prod) ;;
-    "") fail "missing environment name; expected dev, stage, or prod" ;;
-    *) fail "unsupported environment '$1'; expected dev, stage, or prod" ;;
-  esac
-}
-
-enc_path() { need_env "$1"; printf '%s/env/enc/%s.env.enc' "$(repo_root)" "$1"; }
-dec_path() { need_env "$1"; printf '%s/env/dec/%s.env' "$(repo_root)" "$1"; }
-stamp_path() { need_env "$1"; printf '%s/env/dec/.%s.env.sha256' "$(repo_root)" "$1"; }
-
-policy_has_stage_rule() {
-  local root
-  root="$(repo_root)"
-  [ -f "$root/.sops.yaml" ] &&
-    grep -Fq 'path_regex: ^env/enc/stage\.env\.enc$' "$root/.sops.yaml"
-}
-
-require_environment_configured() {
-  local name="$1"
-  need_env "$name"
-  if [ "$name" = stage ] && ! policy_has_stage_rule; then
-    fail "stage is not configured; run 'ores-sops init --with-stage' or add the exact stage rule first"
-  fi
-}
-
-assert_not_symlink() {
-  local path="$1" label="${2:-path}"
-  [ ! -L "$path" ] || fail "$label must not be a symlink: $(log_path "$path")"
-}
-
-assert_managed_tree_safe() {
-  local root rel path
-  root="$(repo_root)"
-  for rel in env env/enc env/dec; do
-    path="$root/$rel"
-    assert_not_symlink "$path" "managed path"
-    if [ -e "$path" ] && [ ! -d "$path" ]; then
-      fail "managed path must be a directory: $(log_path "$path")"
-    fi
-  done
-}
-
-ensure_dec_directory() {
-  local root
-  root="$(repo_root)"
-  assert_managed_tree_safe
-  mkdir -p "$root/env/dec"
-  chmod 700 "$root/env/dec"
-}
-
-prepare_managed_tree() {
-  local root
-  root="$(repo_root)"
-  ensure_dec_directory
-  assert_managed_tree_safe
-  mkdir -p "$root/env/enc"
-}
-
-cmd_ensure_dec() {
-  ensure_dec_directory
-  printf 'ores-sops: ready env/dec (mode 0700, runtime-only)\n'
-}
-
-assert_managed_file_safe() {
-  local path="$1"
-  assert_not_symlink "$path" "managed file"
-}
-
-assert_policy_path_safe() {
-  local root path
-  root="$(repo_root)"
-  for path in "$root/.sops.yaml" "$root/.gitignore" "$root/.gitattributes" "$root/.env.example"; do
-    assert_not_symlink "$path" "policy file"
-  done
-}
-
-sha256_stdin() {
-  if command -v sha256sum >/dev/null 2>&1; then
-    sha256sum | awk '{print $1}'
-  else
-    shasum -a 256 | awk '{print $1}'
-  fi
-}
-
-validate_dotenv_file() {
-  local file="$1" rc
-  if awk '
-    /^[[:space:]]*$/ || /^[[:space:]]*#/ { next }
-    /^[A-Za-z_][A-Za-z0-9_]*=/ {
-      key=$0
-      sub(/=.*/, "", key)
-      if (seen[key]++) duplicate=1
-      next
-    }
-    { malformed=1 }
-    END {
-      if (malformed) exit 2
-      if (duplicate) exit 3
-    }
-  ' "$file"; then
-    return 0
-  else
-    rc=$?
-  fi
-  case "$rc" in
-    0) return 0 ;;
-    2) fail "dotenv contains a malformed non-comment line: $(log_path "$file")" ;;
-    3) fail "dotenv contains duplicate variable names: $(log_path "$file")" ;;
-    *) fail "could not validate dotenv file: $(log_path "$file")" ;;
-  esac
-}
-
-record_stamp() {
-  local name="$1" stamp tmp
-  stamp="$(stamp_path "$name")"
-  assert_managed_file_safe "$stamp"
-  umask 077
-  tmp="$(mktemp "$(dirname "$stamp")/.${name}.stamp.XXXXXX")"
-  trap 'rm -f -- "$tmp"' EXIT
-  trap 'rm -f -- "$tmp"; exit 130' HUP INT TERM
-  sha256_stdin <"$(dec_path "$name")" >"$tmp"
-  chmod 600 "$tmp"
-  mv -f "$tmp" "$stamp"
-  trap - EXIT HUP INT TERM
-}
-
-has_local_edits() {
-  local name="$1" src dst stamp
-  src="$(enc_path "$name")"
-  dst="$(dec_path "$name")"
-  stamp="$(stamp_path "$name")"
-  assert_managed_tree_safe
-  assert_managed_file_safe "$src"
-  assert_managed_file_safe "$dst"
-  assert_managed_file_safe "$stamp"
-  [ -f "$dst" ] || return 1
-  if [ -f "$stamp" ]; then
-    [ "$(sha256_stdin <"$dst")" != "$(cat "$stamp")" ]
-    return
-  fi
-  [ -f "$src" ] || return 1
-  ! sops decrypt "${DOTENV[@]}" "$src" 2>/dev/null | diff -q - "$dst" >/dev/null 2>&1
-}
-
-ciphertext_differs() {
-  local name="$1" src dst
-  src="$(enc_path "$name")"
-  dst="$(dec_path "$name")"
-  assert_managed_tree_safe
-  assert_managed_file_safe "$src"
-  assert_managed_file_safe "$dst"
-  [ -f "$src" ] || return 1
-  [ -f "$dst" ] || return 0
-  ! sops decrypt "${DOTENV[@]}" "$src" 2>/dev/null | diff -q - "$dst" >/dev/null 2>&1
-}
-
-active_name() {
-  local root target
-  root="$(repo_root)"
-  [ -L "$root/.env" ] || return 0
-  target="$(readlink "$root/.env")"
-  case "$target" in
-    env/dec/dev.env) printf 'dev\n' ;;
-    env/dec/stage.env) printf 'stage\n' ;;
-    env/dec/prod.env) printf 'prod\n' ;;
-    *) return 0 ;;
-  esac
-}
-
-assert_root_env_manageable() {
-  local root target
-  root="$(repo_root)"
-  if [ -e "$root/.env" ] || [ -L "$root/.env" ]; then
-    [ -L "$root/.env" ] || fail "refusing to overwrite unmanaged root .env"
-    target="$(readlink "$root/.env")"
-    case "$target" in
-      env/dec/dev.env|env/dec/stage.env|env/dec/prod.env) ;;
-      *) fail "refusing to replace unmanaged .env symlink -> $target" ;;
-    esac
-  fi
-}
-
-write_plaintext() {
-  local name="$1" src dst dir tmp
-  require_environment_configured "$name"
-  prepare_managed_tree
-  src="$(enc_path "$name")"
-  dst="$(dec_path "$name")"
-  dir="$(dirname "$dst")"
-  assert_managed_file_safe "$src"
-  assert_managed_file_safe "$dst"
-  [ -f "$src" ] || fail "missing env/enc/$name.env.enc"
-  umask 077
-  tmp="$(mktemp "$dir/.${name}.env.tmp.XXXXXX")"
-  trap 'rm -f -- "$tmp"' EXIT
-  trap 'rm -f -- "$tmp"; exit 130' HUP INT TERM
-  if ! sops decrypt "${DOTENV[@]}" "$src" >"$tmp"; then
-    fail "could not decrypt '$name' — is your identity an authorized recipient?"
-  fi
-  validate_dotenv_file "$tmp"
-  chmod 600 "$tmp"
-  mv -f "$tmp" "$dst"
-  trap - EXIT HUP INT TERM
-  record_stamp "$name"
-}
-
-activate_link() {
-  local name="$1" root tmp
-  require_environment_configured "$name"
-  root="$(repo_root)"
-  prepare_managed_tree
-  assert_root_env_manageable
-  tmp="$(mktemp "$root/.env.ores-sops.XXXXXX")"
-  rm -f -- "$tmp"
-  ln -s "env/dec/$name.env" "$tmp"
-  mv -f "$tmp" "$root/.env"
-}
-
-cmd_use() {
-  local force=0 name
-  if [ "${1:-}" = "--force" ] || [ "${1:-}" = "-f" ]; then force=1; shift; fi
-  name="${1:-}"
-  require_environment_configured "$name"
-  prepare_managed_tree
-  assert_managed_file_safe "$(enc_path "$name")"
-  [ -f "$(enc_path "$name")" ] || fail "missing env/enc/$name.env.enc"
-  if [ "$force" = 0 ] && has_local_edits "$name"; then
-    fail "env/dec/$name.env has local edits; encrypt them or use --force to discard them"
-  fi
-  write_plaintext "$name"
-  activate_link "$name"
-  printf 'ores-sops: .env -> env/dec/%s.env\n' "$name"
-}
-
-cmd_encrypt() {
-  local allow_empty=0 name root src_rel dst_rel src dst tmp
-  if [ "${1:-}" = "--allow-empty" ]; then allow_empty=1; shift; fi
-  name="${1:-}"
-  require_environment_configured "$name"
-  prepare_managed_tree
-  root="$(repo_root)"
-  src_rel="env/dec/$name.env"
-  dst_rel="env/enc/$name.env.enc"
-  src="$root/$src_rel"
-  dst="$root/$dst_rel"
-  assert_managed_file_safe "$src"
-  assert_managed_file_safe "$dst"
-  [ -f "$src" ] || fail "missing $src_rel"
-  validate_dotenv_file "$src"
-
-  if [ "$allow_empty" = 0 ] &&
-     { [ ! -s "$src" ] || ! grep -qE '^[A-Za-z_][A-Za-z0-9_]*=' "$src"; }; then
-    if [ -s "$dst" ]; then
-      fail "$src_rel has no variables; refusing to replace existing ciphertext (use --allow-empty to confirm)"
-    fi
-  fi
-
-  umask 077
-  tmp="$(mktemp "$root/env/enc/.${name}.env.enc.tmp.XXXXXX")"
-  trap 'rm -f -- "$tmp"' EXIT
-  trap 'rm -f -- "$tmp"; exit 130' HUP INT TERM
-  if ! (cd "$root" && sops encrypt "${DOTENV[@]}" --filename-override "$dst_rel" "$src_rel") >"$tmp"; then
-    fail "could not encrypt '$name'; check the exact creation rule in .sops.yaml"
-  fi
-  mv -f "$tmp" "$dst"
-  trap - EXIT HUP INT TERM
-  write_plaintext "$name"
-  printf 'ores-sops: encrypted -> %s\n' "$dst_rel"
-}
-
-cmd_edit() {
-  local name="${1:-}" src
-  require_environment_configured "$name"
-  assert_managed_tree_safe
-  src="$(enc_path "$name")"
-  assert_managed_file_safe "$src"
-  [ -f "$src" ] || fail "missing env/enc/$name.env.enc"
-  sops edit "${DOTENV[@]}" "$src"
-}
-
-cmd_sync_keys() {
-  local name="${1:-}" root src rel
-  require_environment_configured "$name"
-  assert_managed_tree_safe
-  root="$(repo_root)"
-  rel="env/enc/$name.env.enc"
-  src="$root/$rel"
-  assert_managed_file_safe "$src"
-  [ -f "$src" ] || fail "missing $rel"
-  (cd "$root" && sops updatekeys -y --input-type dotenv "$rel")
-  if command -v ores-sops-access-audit >/dev/null 2>&1; then
-    (cd "$root" && ores-sops-access-audit check)
-  fi
-  printf 'ores-sops: synchronized recipients -> %s\n' "$rel"
-}
-
-fingerprint_dotenv() {
-  local file="$1" line key value hash
-  while IFS= read -r line || [ -n "$line" ]; do
-    case "$line" in
-      [A-Za-z_][A-Za-z0-9_]*=*)
-        key="${line%%=*}"
-        value="${line#*=}"
-        hash="$(printf '%s' "$value" | sha256_stdin)"
-        printf '%s\t%s\n' "$key" "$hash"
-        ;;
-    esac
-  done <"$file" | sort
-}
-
-cmd_diff() {
-  local name="${1:-}" src dst dir baseline report
-  require_environment_configured "$name"
-  assert_managed_tree_safe
-  src="$(enc_path "$name")"
-  dst="$(dec_path "$name")"
-  assert_managed_file_safe "$src"
-  assert_managed_file_safe "$dst"
-  [ -f "$src" ] || fail "missing env/enc/$name.env.enc"
-  [ -f "$dst" ] || fail "missing env/dec/$name.env; run ores-sops use $name first"
-  validate_dotenv_file "$dst"
-
-  dir="$(dirname "$dst")"
-  umask 077
-  baseline="$(mktemp "$dir/.${name}.diff-base.XXXXXX")"
-  trap 'rm -f -- "$baseline"' EXIT
-  trap 'rm -f -- "$baseline"; exit 130' HUP INT TERM
-
-  if ! sops decrypt "${DOTENV[@]}" "$src" >"$baseline"; then
-    fail "could not decrypt '$name' for diff"
-  fi
-  validate_dotenv_file "$baseline"
-
-  report="$({
-    awk -F '\t' '
-      NR==FNR { old[$1]=$2; next }
-      { seen[$1]=1; if (!($1 in old)) print "+ " $1; else if (old[$1] != $2) print "~ " $1 }
-      END { for (k in old) if (!(k in seen)) print "- " k }
-    ' <(fingerprint_dotenv "$baseline") <(fingerprint_dotenv "$dst")
-  } | sort)"
-
-  rm -f -- "$baseline"
-  trap - EXIT HUP INT TERM
-  if [ -n "$report" ]; then
-    printf '%s\n' "$report"
-    printf 'ores-sops: + added, - removed, ~ value changed (values intentionally hidden)\n'
-    return 1
-  fi
-  printf 'ores-sops: no local edits\n'
-}
-
-cmd_status() {
-  local name mark active
-  assert_managed_tree_safe
-  active="$(active_name || true)"
-  for name in "${ALL_ENVIRONMENTS[@]}"; do
-    if [ "$name" = stage ] && ! policy_has_stage_rule; then
-      printf '  %-6s not configured\n' "$name"
-      continue
-    fi
-    assert_managed_file_safe "$(enc_path "$name")"
-    assert_managed_file_safe "$(dec_path "$name")"
-    mark="  "
-    [ "$active" = "$name" ] && mark="* "
-    if [ ! -f "$(enc_path "$name")" ]; then
-      printf '%s%-6s missing ciphertext\n' "$mark" "$name"
-    elif [ ! -f "$(dec_path "$name")" ]; then
-      printf '%s%-6s encrypted only\n' "$mark" "$name"
-    elif has_local_edits "$name"; then
-      printf '%s%-6s EDITED — local plaintext differs from managed baseline\n' "$mark" "$name"
-    elif ciphertext_differs "$name"; then
-      printf '%s%-6s STALE — run ores-sops refresh\n' "$mark" "$name"
-    else
-      printf '%s%-6s current\n' "$mark" "$name"
-    fi
-  done
-}
-
-cmd_refresh() {
-  local quiet=0 name
-  [ "${1:-}" = "--quiet" ] && quiet=1
-  assert_managed_tree_safe
-  name="$(active_name || true)"
-  [ -n "$name" ] || return 0
-  if [ "$name" = stage ] && ! policy_has_stage_rule; then
-    [ "$quiet" = 1 ] || printf 'ores-sops: active stage target has no exact policy rule; not refreshing\n' >&2
-    return 0
-  fi
-  [ -f "$(enc_path "$name")" ] || return 0
-  command -v sops >/dev/null 2>&1 || return 0
-  if has_local_edits "$name"; then
-    [ "$quiet" = 1 ] || printf 'ores-sops: local edits in env/dec/%s.env; not refreshing\n' "$name" >&2
-    return 0
-  fi
-  ciphertext_differs "$name" || return 0
-  if ! write_plaintext "$name" 2>/dev/null; then
-    [ "$quiet" = 1 ] || printf 'ores-sops: could not refresh %s; existing plaintext left untouched\n' "$name" >&2
-    return 0
-  fi
-  [ "$quiet" = 1 ] || printf 'ores-sops: refreshed env/dec/%s.env\n' "$name"
-}
-
-cmd_lock() {
-  local root target name f
-  root="$(repo_root)"
-  assert_managed_tree_safe
-  if [ -L "$root/.env" ]; then
-    target="$(readlink "$root/.env")"
-    case "$target" in
-      env/dec/dev.env|env/dec/stage.env|env/dec/prod.env) rm -f "$root/.env" ;;
-      *) fail "refusing to remove unmanaged .env symlink -> $target" ;;
-    esac
-  elif [ -e "$root/.env" ]; then
-    fail "refusing to remove unmanaged root .env"
-  fi
-  for name in "${ALL_ENVIRONMENTS[@]}"; do
-    assert_managed_file_safe "$(dec_path "$name")"
-    assert_managed_file_safe "$(stamp_path "$name")"
-    rm -f "$(dec_path "$name")" "$(stamp_path "$name")"
-  done
-  for name in "${ALL_ENVIRONMENTS[@]}"; do
-    for f in \
-      "$root"/env/dec/."$name".env.tmp.* \
-      "$root"/env/dec/."$name".diff-base.* \
-      "$root"/env/dec/."$name".stamp.*; do
-      [ -e "$f" ] || [ -L "$f" ] || continue
-      rm -f -- "$f"
-    done
-  done
-  printf 'ores-sops: removed managed plaintext, temp state, and root .env symlink\n'
-}
-
-is_plaintext_env_path() {
-  case "$1" in
-    .env.example|*/.env.example) return 1 ;;
-    .env|*.env|.env.*|*.env.*|env/dec/*) return 0 ;;
-    *) return 1 ;;
-  esac
-}
-
-is_approved_ciphertext_path() {
-  case "$1" in
-    env/enc/dev.env.enc|env/enc/prod.env.enc) return 0 ;;
-    env/enc/stage.env.enc) policy_has_stage_rule ;;
-    *) return 1 ;;
-  esac
-}
-
-cmd_precommit() {
-  local root f blocked=0 mode shown
-  root="$(repo_root)"
-  while IFS= read -r -d '' f; do
-    [ -n "$f" ] || continue
-    mode="$(git -C "$root" ls-files -s -- "$f" | awk 'NR==1 { print $1 }')"
-    shown="$(log_path "$f")"
-    case "$f" in
-      env/enc/*)
-        if is_approved_ciphertext_path "$f"; then
-          if [ "$mode" = "120000" ]; then
-            printf 'ores-sops: BLOCKED — approved ciphertext path is a symlink: %s\n' "$shown" >&2
-            blocked=1
-          fi
-        else
-          printf 'ores-sops: BLOCKED — unexpected tracked ciphertext path: %s\n' "$shown" >&2
-          blocked=1
-        fi
-        ;;
-      .sops.yaml|.gitignore|.gitattributes|.env.example)
-        if [ "$mode" = "120000" ]; then
-          printf 'ores-sops: BLOCKED — policy file must not be a symlink: %s\n' "$shown" >&2
-          blocked=1
-        fi
-        ;;
-      *)
-        if is_plaintext_env_path "$f"; then
-          printf 'ores-sops: BLOCKED — plaintext dotenv path staged: %s\n' "$shown" >&2
-          blocked=1
-        fi
-        ;;
-    esac
-  done < <(git -C "$root" diff --cached --name-only -z --diff-filter=ACMRTUXB 2>/dev/null || true)
-  [ "$blocked" = 0 ] || return 1
-}
-
-check_ignored() {
-  git -C "$(repo_root)" check-ignore --no-index -q "$1" || fail "expected ignored path: $1"
-}
-
-check_not_ignored() {
-  if git -C "$(repo_root)" check-ignore --no-index -q "$1"; then
-    fail "approved ciphertext is ignored: $1"
-  fi
-}
-
-verify_ciphertext_file() {
-  local file="$1" line key value saw_mac=0 shown
-  assert_managed_file_safe "$file"
-  [ -f "$file" ] || return 0
-  shown="$(log_path "$file")"
-  while IFS= read -r line || [ -n "$line" ]; do
-    case "$line" in
-      sops_mac=ENC\[*) saw_mac=1 ;;
-      [A-Za-z_][A-Za-z0-9_]*=*)
-        key="${line%%=*}"
-        value="${line#*=}"
-        case "$key" in
-          sops_*) ;;
-          *)
-            case "$value" in
-              ''|ENC\[*) ;;
-              *) fail "approved ciphertext contains an obvious plaintext assignment: $shown" ;;
-            esac
-            ;;
-        esac
-        ;;
-    esac
-  done <"$file"
-  [ "$saw_mac" = 1 ] || fail "$shown does not look like SOPS dotenv ciphertext"
-}
-
-verify_sops_rules() {
-  local root line trimmed rule dev_rules=0 stage_rules=0 prod_rules=0
-  root="$(repo_root)"
-  while IFS= read -r line || [ -n "$line" ]; do
-    trimmed="${line#"${line%%[![:space:]]*}"}"
-    rule="$trimmed"
-    case "$rule" in
-      '- '*) rule="${rule#- }" ;;
-    esac
-    case "$rule" in
-      'path_regex: ^env/enc/dev\.env\.enc$') dev_rules=$((dev_rules + 1)) ;;
-      'path_regex: ^env/enc/stage\.env\.enc$') stage_rules=$((stage_rules + 1)) ;;
-      'path_regex: ^env/enc/prod\.env\.enc$') prod_rules=$((prod_rules + 1)) ;;
-      path_regex:*env/enc*) fail "broad or noncanonical env/enc SOPS creation rule is not allowed" ;;
-    esac
-  done <"$root/.sops.yaml"
-
-  [ "$dev_rules" -eq 1 ] || fail "expected exactly one canonical dev SOPS creation rule"
-  [ "$prod_rules" -eq 1 ] || fail "expected exactly one canonical prod SOPS creation rule"
-  [ "$stage_rules" -le 1 ] || fail "expected at most one canonical stage SOPS creation rule"
-
-  if [ -e "$root/env/enc/stage.env.enc" ] || [ -L "$root/env/enc/stage.env.enc" ] ||
-     [ -e "$root/env/dec/stage.env" ] || [ -L "$root/env/dec/stage.env" ]; then
-    [ "$stage_rules" -eq 1 ] || fail "stage material exists without the exact stage SOPS creation rule"
-  fi
-  STAGE_ENABLED="$stage_rules"
-}
-
-verify_no_private_material() {
-  local root age_marker pem_marker openssh_marker
-  root="$(repo_root)"
-  age_marker='AGE-SE''CRET-KEY-1'
-  pem_marker='-----BEGIN ''PRIVATE KEY-----'
-  openssh_marker='-----BEGIN OPENSSH ''PRIVATE KEY-----'
-  if git -C "$root" grep -I -q -e "$age_marker" -e "$pem_marker" -e "$openssh_marker" -- .; then
-    fail "tracked files contain private key material"
-  fi
-}
-
-cmd_verify() {
-  local root name file mode target f shown
-  root="$(repo_root)"
-  assert_managed_tree_safe
-  assert_policy_path_safe
-  [ -f "$root/.gitignore" ] || fail "missing .gitignore"
-  [ -f "$root/.gitattributes" ] || fail "missing .gitattributes"
-  [ -f "$root/.sops.yaml" ] || fail "missing .sops.yaml"
-
-  check_ignored ".env"
-  check_ignored "sample.env"
-  check_ignored "sample.env.local"
-  check_ignored "nested/sample.env"
-  check_ignored "nested/sample.env.local"
-  check_ignored "nested/deeper/sample.env"
-  check_ignored "env/dec/dev.env"
-  check_ignored "env/dec/stage.env"
-  check_ignored "env/dec/prod.env"
-  check_not_ignored "env/enc/dev.env.enc"
-  check_not_ignored "env/enc/prod.env.enc"
-
-  grep -Fq '/env/enc/*.env.enc text eol=lf' "$root/.gitattributes" || fail "missing ciphertext LF normalization in .gitattributes"
-  verify_sops_rules
-  if [ "$STAGE_ENABLED" -eq 1 ]; then
-    check_not_ignored "env/enc/stage.env.enc"
-  fi
-  verify_no_private_material
-
-  while IFS= read -r -d '' f; do
-    shown="$(log_path "$f")"
-    mode="$(git -C "$root" ls-files -s -- "$f" | awk 'NR==1 { print $1 }')"
-    case "$f" in
-      env/enc/dev.env.enc|env/enc/prod.env.enc)
-        [ "$mode" != "120000" ] || fail "approved ciphertext path is a tracked symlink: $shown"
-        ;;
-      env/enc/stage.env.enc)
-        [ "$STAGE_ENABLED" -eq 1 ] || fail "tracked stage ciphertext exists without the exact stage rule: $shown"
-        [ "$mode" != "120000" ] || fail "approved ciphertext path is a tracked symlink: $shown"
-        ;;
-      env/enc/*) fail "unexpected tracked file under env/enc: $shown" ;;
-      .sops.yaml|.gitignore|.gitattributes|.env.example)
-        [ "$mode" != "120000" ] || fail "policy file is a tracked symlink: $shown"
-        ;;
-      *)
-        if is_plaintext_env_path "$f"; then
-          fail "tracked plaintext dotenv path found: $shown"
-        fi
-        ;;
-    esac
-  done < <(git -C "$root" ls-files -z)
-
-  if [ -e "$root/.env" ] || [ -L "$root/.env" ]; then
-    [ -L "$root/.env" ] || fail "root .env exists but is not a symlink"
-    target="$(readlink "$root/.env")"
-    case "$target" in
-      env/dec/dev.env|env/dec/prod.env) ;;
-      env/dec/stage.env)
-        [ "$STAGE_ENABLED" -eq 1 ] || fail "root .env selects stage without the exact stage rule"
-        ;;
-      *) fail "root .env points outside managed env/dec targets: $target" ;;
-    esac
-  fi
-
-  if [ -d "$root/env/dec" ]; then
-    mode="$(stat -c '%a' "$root/env/dec" 2>/dev/null || stat -f '%Lp' "$root/env/dec")"
-    [ "$mode" = "700" ] || fail "$root/env/dec must be mode 0700 (found $mode)"
-  fi
-
-  for name in dev prod; do
-    file="$(dec_path "$name")"
-    assert_managed_file_safe "$file"
-    if [ -f "$file" ]; then
-      validate_dotenv_file "$file"
-      mode="$(stat -c '%a' "$file" 2>/dev/null || stat -f '%Lp' "$file")"
-      [ "$mode" = "600" ] || fail "$file must be mode 0600 (found $mode)"
-    fi
-    file="$(enc_path "$name")"
-    verify_ciphertext_file "$file"
-    if [ -f "$file" ] && [ "${ORES_SOPS_VERIFY_DECRYPT:-0}" = "1" ]; then
-      sops decrypt "${DOTENV[@]}" "$file" >/dev/null || fail "authorized decrypt failed for $name"
-    fi
-  done
-
-  if [ "$STAGE_ENABLED" -eq 1 ]; then
-    name=stage
-    file="$(dec_path "$name")"
-    assert_managed_file_safe "$file"
-    if [ -f "$file" ]; then
-      validate_dotenv_file "$file"
-      mode="$(stat -c '%a' "$file" 2>/dev/null || stat -f '%Lp' "$file")"
-      [ "$mode" = "600" ] || fail "$file must be mode 0600 (found $mode)"
-    fi
-    file="$(enc_path "$name")"
-    verify_ciphertext_file "$file"
-    if [ -f "$file" ] && [ "${ORES_SOPS_VERIFY_DECRYPT:-0}" = "1" ]; then
-      sops decrypt "${DOTENV[@]}" "$file" >/dev/null || fail "authorized decrypt failed for $name"
-    fi
-  fi
-
-  printf 'ores-sops: policy verification passed (stage=%s)\n' "$([ "$STAGE_ENABLED" -eq 1 ] && printf enabled || printf disabled)"
-}
-
-cmd_install_hooks() {
-  local quiet=0 root hooks marker hook file path bash_path quoted_path custom_hooks
-  [ "${1:-}" = "--quiet" ] && quiet=1
-  root="$(repo_root)"
-  custom_hooks="$(git -C "$root" config --path --get core.hooksPath 2>/dev/null || true)"
-  if [ -n "$custom_hooks" ] && [ "${ORES_SOPS_ALLOW_CUSTOM_HOOKS_PATH:-0}" != "1" ]; then
-    fail "refusing to write through custom core.hooksPath; set ORES_SOPS_ALLOW_CUSTOM_HOOKS_PATH=1 after reviewing it"
-  fi
-  hooks="$(git -C "$root" rev-parse --git-path hooks)"
-  case "$hooks" in /*) ;; *) hooks="$root/$hooks" ;; esac
-  assert_not_symlink "$hooks" "hooks directory"
-  mkdir -p "$hooks"
-  marker="# managed by ores-sops"
-  path="$(command -v ores-sops 2>/dev/null || true)"
-  [ -n "$path" ] || path="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/$(basename -- "${BASH_SOURCE[0]}")"
-  bash_path="$(command -v bash 2>/dev/null || true)"
-  [ -n "$bash_path" ] || fail "bash is required to install hooks"
-  case "$bash_path" in *$'\n'*|*$'\r'*|*$'\t'*|*' '*) fail "bash path is not safe for a shebang" ;; esac
-  printf -v quoted_path '%q' "$path"
-
-  for hook in post-merge post-checkout post-rewrite; do
-    file="$hooks/$hook"
-    [ ! -L "$file" ] || fail "refusing to overwrite symlinked hook: $(log_path "$file")"
-    if [ -e "$file" ] && ! grep -qF "$marker" "$file" 2>/dev/null; then
-      [ "$quiet" = 1 ] || printf 'ores-sops: %s exists and is unmanaged; leaving it alone\n' "$hook" >&2
-      continue
-    fi
-    cat >"$file" <<EOF_HOOK
-#!$bash_path
-$marker
-$quoted_path refresh --quiet || true
-exit 0
-EOF_HOOK
-    chmod +x "$file"
-  done
-
-  file="$hooks/pre-commit"
-  [ ! -L "$file" ] || fail "refusing to overwrite symlinked hook: $(log_path "$file")"
-  if [ -e "$file" ] && ! grep -qF "$marker" "$file" 2>/dev/null; then
-    [ "$quiet" = 1 ] || printf 'ores-sops: pre-commit exists and is unmanaged; leaving it alone\n' >&2
-  else
-    cat >"$file" <<EOF_HOOK
-#!$bash_path
-$marker
-$quoted_path precommit
-EOF_HOOK
-    chmod +x "$file"
-  fi
-}
-
-recipient_list_contains() {
-  local list="$1" recipient="$2"
-  case " $list " in
-    *" $recipient "*) return 0 ;;
-    *) return 1 ;;
-  esac
-}
-
-validate_public_recipient() {
-  printf '%s' "$1" | grep -qE '^age1[a-z0-9]{58}$' || fail "invalid age public recipient supplied"
-}
-
-add_recipient() {
-  local environment="$1" recipient="$2" current
-  validate_public_recipient "$recipient"
-  case "$environment" in
-    dev) current="$DEV_RECIPIENTS" ;;
-    stage) current="$STAGE_RECIPIENTS" ;;
-    prod) current="$PROD_RECIPIENTS" ;;
-    *) fail "internal recipient environment error" ;;
-  esac
-  recipient_list_contains "$current" "$recipient" && return 0
-  current="${current:+$current }$recipient"
-  case "$environment" in
-    dev) DEV_RECIPIENTS="$current" ;;
-    stage) STAGE_RECIPIENTS="$current" ;;
-    prod) PROD_RECIPIENTS="$current" ;;
-  esac
-}
-
-add_recipient_input() {
-  local environment="$1" input="$2" recipient
-  for recipient in $(printf '%s' "$input" | tr ',' ' '); do
-    [ -n "$recipient" ] || continue
-    add_recipient "$environment" "$recipient"
-  done
-}
-
-recipient_block() {
-  local list="$1" recipient
-  for recipient in $list; do
-    printf '      - %s\n' "$recipient"
-  done
-}
-
-append_stage_ignore_exception() {
-  local ignore="$1"
-  grep -Fxq '!/env/enc/stage.env.enc' "$ignore" 2>/dev/null ||
-    printf '!/env/enc/stage.env.enc\n' >>"$ignore"
-}
-
-cmd_init() {
-  local root key recipient ignore attrs
-  local with_stage=0 scoped_mode=0 common_input="" dev_input="" stage_input="" prod_input="" recovery_input=""
-  local dev_block stage_block prod_block
-  root="$(repo_root)"
-  assert_policy_path_safe
-  prepare_managed_tree
-
-  while [ "$#" -gt 0 ]; do
-    case "$1" in
-      --with-stage) with_stage=1; shift ;;
-      --recipient)
-        [ "$#" -ge 2 ] || fail "--recipient needs an age public key"
-        common_input="$common_input $2"; shift 2 ;;
-      --recipient=*) common_input="$common_input ${1#--recipient=}"; shift ;;
-      --dev-recipient)
-        [ "$#" -ge 2 ] || fail "--dev-recipient needs an age public key"
-        dev_input="$dev_input $2"; scoped_mode=1; shift 2 ;;
-      --dev-recipient=*) dev_input="$dev_input ${1#--dev-recipient=}"; scoped_mode=1; shift ;;
-      --stage-recipient)
-        [ "$#" -ge 2 ] || fail "--stage-recipient needs an age public key"
-        stage_input="$stage_input $2"; scoped_mode=1; with_stage=1; shift 2 ;;
-      --stage-recipient=*) stage_input="$stage_input ${1#--stage-recipient=}"; scoped_mode=1; with_stage=1; shift ;;
-      --prod-recipient)
-        [ "$#" -ge 2 ] || fail "--prod-recipient needs an age public key"
-        prod_input="$prod_input $2"; scoped_mode=1; shift 2 ;;
-      --prod-recipient=*) prod_input="$prod_input ${1#--prod-recipient=}"; scoped_mode=1; shift ;;
-      --recovery-recipient)
-        [ "$#" -ge 2 ] || fail "--recovery-recipient needs an age public key"
-        recovery_input="$recovery_input $2"; scoped_mode=1; shift 2 ;;
-      --recovery-recipient=*) recovery_input="$recovery_input ${1#--recovery-recipient=}"; scoped_mode=1; shift ;;
-      *) fail "unknown argument for init: $1" ;;
-    esac
-  done
-
-  common_input="$common_input ${ORES_SOPS_EXTRA_RECIPIENTS:-}"
-  dev_input="$dev_input ${ORES_SOPS_DEV_RECIPIENTS:-}"
-  stage_input="$stage_input ${ORES_SOPS_STAGE_RECIPIENTS:-}"
-  prod_input="$prod_input ${ORES_SOPS_PROD_RECIPIENTS:-}"
-  recovery_input="$recovery_input ${ORES_SOPS_RECOVERY_RECIPIENTS:-}"
-  if [ -n "${ORES_SOPS_DEV_RECIPIENTS:-}${ORES_SOPS_STAGE_RECIPIENTS:-}${ORES_SOPS_PROD_RECIPIENTS:-}${ORES_SOPS_RECOVERY_RECIPIENTS:-}" ]; then
-    scoped_mode=1
-  fi
-  [ -z "${ORES_SOPS_STAGE_RECIPIENTS:-}" ] || with_stage=1
-
-  key="${SOPS_AGE_KEY_FILE:-$HOME/.config/sops/age/keys.txt}"
-  [ -f "$key" ] || fail "no age identity at $key — create one with: age-keygen -o $key"
-  recipient="$(grep -o 'age1[a-z0-9]\{58\}' "$key" | head -1)"
-  [ -n "$recipient" ] || fail "no age recipient found in $key"
-
-  DEV_RECIPIENTS=""
-  STAGE_RECIPIENTS=""
-  PROD_RECIPIENTS=""
-
-  if [ "$scoped_mode" -eq 0 ]; then
-    add_recipient dev "$recipient"
-    add_recipient prod "$recipient"
-    [ "$with_stage" -eq 0 ] || add_recipient stage "$recipient"
-  else
-    # In scoped mode the local identity starts as development-only. Elevated
-    # access is granted only by explicitly listing its public recipient again.
-    add_recipient dev "$recipient"
-  fi
-
-  add_recipient_input dev "$common_input"
-  add_recipient_input prod "$common_input"
-  [ "$with_stage" -eq 0 ] || add_recipient_input stage "$common_input"
-  add_recipient_input dev "$dev_input"
-  add_recipient_input prod "$prod_input"
-  [ "$with_stage" -eq 0 ] || add_recipient_input stage "$stage_input"
-  add_recipient_input dev "$recovery_input"
-  add_recipient_input prod "$recovery_input"
-  [ "$with_stage" -eq 0 ] || add_recipient_input stage "$recovery_input"
-
-  if [ ! -f "$root/.sops.yaml" ]; then
-    [ -n "$DEV_RECIPIENTS" ] || fail "dev requires at least one public recipient"
-    [ -n "$PROD_RECIPIENTS" ] || fail "scoped init requires --prod-recipient, --recovery-recipient, or --recipient"
-    if [ "$with_stage" -eq 1 ]; then
-      [ -n "$STAGE_RECIPIENTS" ] || fail "scoped stage init requires --stage-recipient, --recovery-recipient, or --recipient"
-    fi
-  elif [ "$with_stage" -eq 1 ] && ! policy_has_stage_rule; then
-    [ -n "$STAGE_RECIPIENTS" ] || fail "adding stage requires --stage-recipient, --recovery-recipient, --recipient, or legacy local bootstrap"
-  fi
-
-  dev_block="$(recipient_block "$DEV_RECIPIENTS")"
-  prod_block="$(recipient_block "$PROD_RECIPIENTS")"
-  stage_block="$(recipient_block "$STAGE_RECIPIENTS")"
-
-  if [ ! -f "$root/.sops.yaml" ]; then
-    {
-      printf '%s\n' '# Bootstrap policy with exact per-environment path rules.'
-      if [ "$scoped_mode" -eq 0 ]; then
-        printf '%s\n' '# The same local recipient is used only for initial compatibility.'
-        printf '%s\n' '# Replace elevated environment recipients before production reliance.'
-      else
-        printf '%s\n' '# Scoped mode: the local identity is development-only unless explicitly re-added.'
-      fi
-      printf '%s\n' 'creation_rules:'
-      printf '%s\n' '  - path_regex: ^env/enc/dev\.env\.enc$'
-      printf '%s\n' '    age:'
-      printf '%s\n' "$dev_block"
-      if [ "$with_stage" -eq 1 ]; then
-        printf '%s\n' '  - path_regex: ^env/enc/stage\.env\.enc$'
-        printf '%s\n' '    age:'
-        printf '%s\n' "$stage_block"
-      fi
-      printf '%s\n' '  - path_regex: ^env/enc/prod\.env\.enc$'
-      printf '%s\n' '    age:'
-      printf '%s\n' "$prod_block"
-    } >"$root/.sops.yaml"
-  elif [ "$with_stage" -eq 1 ] && ! policy_has_stage_rule; then
-    {
-      printf '%s\n' '  - path_regex: ^env/enc/stage\.env\.enc$'
-      printf '%s\n' '    age:'
-      printf '%s\n' "$stage_block"
-    } >>"$root/.sops.yaml"
-  fi
-
-  ignore="$root/.gitignore"
-  if ! grep -qF '# BEGIN ores-sops dotenv policy' "$ignore" 2>/dev/null; then
-    cat >>"$ignore" <<'EOF_IGNORE'
-
-# BEGIN ores-sops dotenv policy
-# Plaintext dotenv is local-only at every depth, including common suffix variants.
-*.env
-*/*.env
-*/**/*.env
-.env.*
-*.env.*
-!.env.example
-
-# Decrypted material is never tracked.
-/env/dec/
-
-# Only canonical ciphertext paths are trackable.
-/env/enc/*
-!/env/enc/dev.env.enc
-!/env/enc/prod.env.enc
-# END ores-sops dotenv policy
-EOF_IGNORE
-  elif ! grep -Fxq '*.env.*' "$ignore"; then
-    printf '\n# ores-sops hardening: ignore common dotenv suffix variants.\n*.env.*\n!/env/enc/dev.env.enc\n!/env/enc/prod.env.enc\n' >>"$ignore"
-  fi
-  [ "$with_stage" -eq 0 ] || append_stage_ignore_exception "$ignore"
-
-  attrs="$root/.gitattributes"
-  if ! grep -qF '/env/enc/*.env.enc text eol=lf' "$attrs" 2>/dev/null; then
-    printf '\n/env/enc/*.env.enc text eol=lf\n' >>"$attrs"
-  fi
-
-  if [ ! -f "$root/.env.example" ]; then
-    cat >"$root/.env.example" <<'EOF_EXAMPLE'
-# Safe schema/example only. Never put real credentials here.
-# REQUIRED_KEY=replace-with-obviously-fake-value
-EOF_EXAMPLE
-  fi
-
-  cmd_verify
-}
-
-usage() {
-  cat <<'EOF_USAGE'
-ores-sops — ORESoftware SOPS dotenv convention
-
-  init [--with-stage] [recipient options]
-                          scaffold exact dev/[stage]/prod policy and ignore rules
-  use dev|stage|prod [-f]
-                          atomically decrypt and point .env at it
-  encrypt dev|stage|prod  encrypt managed plaintext back to .env.enc
-  edit dev|stage|prod     edit ciphertext through SOPS
-  sync-keys dev|stage|prod
-                          apply the selected exact .sops.yaml recipient rule
-  diff dev|stage|prod     report changed key names only; never print values
-  status                  show non-secret local state
-  refresh                 refresh active plaintext after ciphertext changes
-  verify                  keyless policy checks; set ORES_SOPS_VERIFY_DECRYPT=1 for decrypt checks
-  precommit               block plaintext and unexpected env/enc paths
-  lock                    remove managed plaintext, temp state, and managed .env symlink
-  install-hooks           install safe refresh/pre-commit hooks
-  ensure-dec              create the ignored runtime env/dec directory, mode 0700
-
-Init recipient options:
-  --recipient K           legacy/common recipient for every configured environment
-  --dev-recipient K       recipient for dev only
-  --stage-recipient K     recipient for stage only; also enables stage
-  --prod-recipient K      recipient for prod only
-  --recovery-recipient K  recipient for every configured environment
-
-Scoped init makes the local age identity development-only unless its public
-recipient is explicitly supplied for stage/prod. Options are repeatable; matching
-ORES_SOPS_*_RECIPIENTS environment variables accept comma/space-separated keys.
-
-Canonical tracked secret-bearing paths are:
-  env/enc/dev.env.enc
-  env/enc/stage.env.enc   # optional exact v0.4 environment
-  env/enc/prod.env.enc
-
-Every SOPS operation uses explicit --input-type dotenv --output-type dotenv.
-Managed env/policy paths and hook files must not be symlinks.
-Custom core.hooksPath is refused unless explicitly opted in after review.
-EOF_USAGE
-}
-
-main() {
-  local cmd="${1:-}"
-  [ "$#" -gt 0 ] && shift || true
-
-  case "$cmd" in
-    init|use|encrypt|edit|sync-keys|diff|status|refresh|verify|precommit|lock|install-hooks|ensure-dec)
-      ensure_dec_directory
-      ;;
+    *) fail invalid_environment "environment must be dev, stage, or prod" "ORES_SOPS_ENVIRONMENT" "${command_name}" ;;
   esac
 
-  case "$cmd" in
-    init) cmd_init "$@" ;;
-    use) cmd_use "$@" ;;
-    encrypt) cmd_encrypt "$@" ;;
-    edit) cmd_edit "$@" ;;
-    sync-keys) cmd_sync_keys "$@" ;;
-    diff) cmd_diff "$@" ;;
-    status) cmd_status "$@" ;;
-    refresh) cmd_refresh "$@" ;;
-    verify) cmd_verify "$@" ;;
-    precommit) cmd_precommit "$@" ;;
-    lock) cmd_lock "$@" ;;
-    install-hooks) cmd_install_hooks "$@" ;;
-    ensure-dec) cmd_ensure_dec "$@" ;;
-    --version|version) printf 'ores-sops %s\n' "$VERSION" ;;
-    -h|--help|help|"") usage ;;
-    *) fail "unknown command '$cmd' (try: ores-sops help)" ;;
-  esac
-}
+  normalized+=("${safe_profile}")
+  args=("${normalized[@]}")
+fi
 
-main "$@"
+emit_diag command_started "${command_name}" "${safe_profile}" "" "0"
+
+set +e
+"${CORE}" "${args[@]}"
+status=$?
+set -e
+
+if (( status == 0 )); then
+  emit_diag command_completed "${command_name}" "${safe_profile}" "" "0"
+else
+  emit_diag command_failed "${command_name}" "${safe_profile}" "" "${status}"
+fi
+exit "${status}"

@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "ores.sops.diagnostic.schema.json",
+  "$defs": {
+    "DiagnosticLevel": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$id": "DiagnosticLevel",
+      "type": "string",
+      "enum": ["info", "warn", "error"]
+    },
+    "DiagnosticEvent": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$id": "DiagnosticEvent",
+      "type": "string",
+      "enum": [
+        "core_missing",
+        "config_missing",
+        "config_invalid",
+        "dependency_missing",
+        "argv_admission_rejected",
+        "environment_conflict",
+        "required_env_missing",
+        "invalid_environment",
+        "command_started",
+        "command_completed",
+        "command_failed"
+      ]
+    },
+    "DiagnosticDetails": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$id": "DiagnosticDetails",
+      "type": "object",
+      "properties": {
+        "command": { "type": "string" },
+        "profile": { "type": "string" },
+        "key": { "type": "string" },
+        "exitCode": { "type": "integer", "minimum": 0, "maximum": 255 }
+      },
+      "required": ["command", "profile", "key", "exitCode"],
+      "unevaluatedProperties": false
+    },
+    "OresSopsDiagnostic": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$id": "OresSopsDiagnostic",
+      "type": "object",
+      "properties": {
+        "schema": { "type": "string", "const": "ores.sops/diagnostic/v1" },
+        "level": { "$ref": "DiagnosticLevel" },
+        "component": { "type": "string", "const": "ores-sops" },
+        "event": { "$ref": "DiagnosticEvent" },
+        "message": { "type": "string" },
+        "details": { "$ref": "DiagnosticDetails" }
+      },
+      "required": ["schema", "level", "component", "event", "message", "details"],
+      "unevaluatedProperties": false
+    }
+  }
+}

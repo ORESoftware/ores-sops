@@ -1,0 +1,13 @@
+{
+  "schema": "ores.sops/diagnostic/v1",
+  "level": "error",
+  "component": "ores-sops",
+  "event": "command_failed",
+  "message": "ores-sops command failed",
+  "details": {
+    "command": "use",
+    "profile": "dev",
+    "key": "",
+    "exitCode": 256
+  }
+}

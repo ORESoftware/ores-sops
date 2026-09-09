@@ -1,0 +1,13 @@
+{
+  "schema": "ores.sops/diagnostic/v1",
+  "level": "error",
+  "component": "ores-sops",
+  "event": "arbitrary_secret_bearing_event",
+  "message": "must be rejected by the closed event contract",
+  "details": {
+    "command": "use",
+    "profile": "",
+    "key": "ORES_SOPS_ENVIRONMENT",
+    "exitCode": 2
+  }
+}

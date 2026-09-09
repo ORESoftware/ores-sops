@@ -1,0 +1,13 @@
+{
+  "schema": "ores.sops/diagnostic/v1",
+  "level": "debug",
+  "component": "ores-sops",
+  "event": "example",
+  "message": "synthetic invalid fixture",
+  "details": {
+    "command": "use",
+    "profile": "dev",
+    "key": "SYNTHETIC",
+    "exitCode": 2
+  }
+}

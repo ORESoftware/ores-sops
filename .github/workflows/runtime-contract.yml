@@ -1,0 +1,56 @@
+name: runtime-contract
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  runtime-admission:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Shell syntax and executable boundary
+        run: |
+          bash -n ores-sops
+          bash -n scripts/ores-sops-core
+          bash -n scripts/ores-sops-telemetry
+          bash -n tests/runtime-admission.sh
+          bash -n tests/flags2env-integration.sh
+          test -x ores-sops
+          test -x scripts/ores-sops-core
+          test -x scripts/ores-sops-telemetry
+      - name: Runtime admission and telemetry redaction
+        run: bash tests/runtime-admission.sh
+
+  flags2env-integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install canonical flags-2-env from pinned GitHub source
+        run: |
+          npm install --no-save --ignore-scripts=false \
+            https://github.com/flags-2-env/flags-2-env/archive/8892365548557e437d81a0d44d650fb9abff6c44.tar.gz
+      - name: Audit and exercise the real flags2env parser
+        run: |
+          PATH="$PWD/node_modules/.bin:$PATH" bash tests/flags2env-integration.sh
+
+  typespec-json-schema-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Enforce independent TypeSpec and JSON Schema authorities with TJSV
+        uses: ORESoftware/typespec-json-schema-validator@f8b68ccc9d88fbe3843106b8d79fd9e1dbac3256
+        with:
+          typespec: contracts/main.tsp
+          schema: contracts/authored.schema.json
+          instances: contracts/instances
+          report: contracts/tjsv-report.json
+          sarif: ''
+          quiet: 'false'
