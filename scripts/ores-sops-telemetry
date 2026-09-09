@@ -65,7 +65,7 @@ case "${event}" in
 esac
 
 case "${command_name}" in
-  init|use|refresh|encrypt|edit|sync-keys|diff|status|lock|verify|precommit|install-hooks|help|version|unknown) ;;
+  init|use|refresh|encrypt|edit|sync-keys|diff|status|lock|verify|precommit|ensure-dec|install-hooks|help|version|unknown) ;;
   *) command_name="unknown" ;;
 esac
 case "${profile}" in ""|dev|stage|prod) ;; *) profile="" ;; esac
