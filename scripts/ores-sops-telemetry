@@ -21,6 +21,10 @@ case "${event}" in
     level="error"
     message=".cli-flags.toml is missing"
     ;;
+  config_invalid)
+    level="error"
+    message=".cli-flags.toml admission audit failed"
+    ;;
   dependency_missing)
     level="error"
     message="required dependency is not available"
@@ -66,7 +70,7 @@ case "${command_name}" in
 esac
 case "${profile}" in ""|dev|stage|prod) ;; *) profile="" ;; esac
 case "${key_name}" in
-  ""|ORES_SOPS_ENVIRONMENT|flags2env) ;;
+  ""|ORES_SOPS_ENVIRONMENT|flags2env|node) ;;
   *) key_name="redacted-key-name" ;;
 esac
 if [[ ! "${exit_code}" =~ ^[0-9]{1,3}$ ]] || (( 10#${exit_code} > 255 )); then
