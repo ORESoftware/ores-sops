@@ -3,15 +3,63 @@ set -euo pipefail
 
 [[ "${ORES_SOPS_TELEMETRY:-1}" == "0" ]] && exit 0
 
-level="${1:-error}"
-event="${2:-unknown}"
-message="${3:-ores-sops diagnostic}"
-command_name="${4:-unknown}"
-profile="${5:-}"
-key_name="${6:-}"
-exit_code="${7:-0}"
+event="${1:-}"
+command_name="${2:-unknown}"
+profile="${3:-}"
+key_name="${4:-}"
+exit_code="${5:-0}"
 
-case "${level}" in info|warn|error) ;; *) level="error" ;; esac
+# Closed event mapping: callers cannot supply arbitrary log messages or levels.
+# This keeps the Bash boundary payload-free apart from allow-listed metadata and
+# makes the stderr record safe for the ores-otel/platform logging pipeline.
+case "${event}" in
+  core_missing)
+    level="error"
+    message="internal core executable is missing"
+    ;;
+  config_missing)
+    level="error"
+    message=".cli-flags.toml is missing"
+    ;;
+  dependency_missing)
+    level="error"
+    message="required dependency is not available"
+    ;;
+  argv_admission_rejected)
+    level="error"
+    message="command-line admission failed"
+    ;;
+  environment_conflict)
+    level="error"
+    message="environment was supplied more than once with conflicting values"
+    ;;
+  required_env_missing)
+    level="error"
+    message="required environment is missing"
+    ;;
+  invalid_environment)
+    level="error"
+    message="environment must be dev, stage, or prod"
+    ;;
+  command_started)
+    level="info"
+    message="ores-sops command admitted"
+    ;;
+  command_completed)
+    level="info"
+    message="ores-sops command completed"
+    ;;
+  command_failed)
+    level="error"
+    message="ores-sops command failed"
+    ;;
+  *)
+    # Unknown telemetry events are rejected without echoing attacker-controlled
+    # input. The wrapper treats diagnostics as best-effort and continues.
+    exit 2
+    ;;
+esac
+
 case "${command_name}" in
   init|use|refresh|encrypt|edit|sync-keys|diff|status|lock|verify|precommit|install-hooks|help|version|unknown) ;;
   *) command_name="unknown" ;;
@@ -21,7 +69,9 @@ case "${key_name}" in
   ""|ORES_SOPS_ENVIRONMENT|flags2env) ;;
   *) key_name="redacted-key-name" ;;
 esac
-[[ "${exit_code}" =~ ^[0-9]{1,3}$ ]] || exit_code="1"
+if [[ ! "${exit_code}" =~ ^[0-9]{1,3}$ ]] || (( 10#${exit_code} > 255 )); then
+  exit_code="1"
+fi
 
 json_escape() {
   local s="$1"
