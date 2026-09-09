@@ -127,7 +127,9 @@ grep -q '^--version$' "${CORE_ARGS_CAPTURE}"
 
 case_label empty-argv
 "${TMP}/ores-sops" >"${TMP}/out" 2>"${TMP}/err"
-[[ ! -s "${CORE_ARGS_CAPTURE}" ]]
+# The test core always writes one trailing newline. Command substitution strips
+# it, so this checks the captured argv payload rather than file byte length.
+[[ "$(cat "${CORE_ARGS_CAPTURE}")" == "" ]]
 
 case_label dotenv-disabled
 unset ORES_SOPS_ENVIRONMENT || true
