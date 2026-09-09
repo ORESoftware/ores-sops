@@ -31,16 +31,19 @@ The runners accept no command-line options. Their bootstrap inputs are environme
 
 ### Read-only GitHub API inventory
 
-Repository secrets and variables are always inventoried. Set `ORES_SOPS_GHA_ENVIRONMENT=dev|stage|prod` to additionally inventory that GitHub environment. Organization-level inventory is opt-in because it requires organization permissions; set `ORES_SOPS_GHA_INCLUDE_ORGANIZATION=1` only for an organization-owned repository when the authenticated identity is authorized.
+Repository secrets and variables are always inventoried. Set `ORES_SOPS_GHA_ENVIRONMENT=dev|stage|prod` to additionally inventory that GitHub environment.
+
+Organization-level inventory is opt-in. With `ORES_SOPS_GHA_INCLUDE_ORGANIZATION=1`, the helper uses the repository-scoped GitHub endpoints `repos/{owner}/{repo}/actions/organization-secrets` and `repos/{owner}/{repo}/actions/organization-variables`. Those endpoints return only organization configuration that is actually shared with the selected repository; the helper never performs a broad `orgs/{org}/actions/*` inventory. This avoids warnings for unrelated organization configuration and allows repository-scoped read permissions instead of requiring organization-admin inventory access.
 
 ```text
 ORES_SOPS_GHA_REPOSITORY=owner/repo
 ORES_SOPS_GHA_ENVIRONMENT=prod
+ORES_SOPS_GHA_INCLUDE_ORGANIZATION=1
 ORES_SOPS_GHA_INVENTORY_FILE=/runner/private/github-inventory.json
 node scripts/inventory-github-actions-config.mjs
 ```
 
-The helper calls the GitHub Actions secrets/variables REST endpoints through `gh api --paginate --slurp`. Secret values are unavailable by API design. Variable endpoint responses do contain values, but the helper immediately reduces every item to its name and source class. It suppresses `gh` stderr on API failure so provider responses are not copied into CI logs.
+The helper calls the GitHub Actions secrets/variables REST endpoints through `gh api --paginate --slurp` and explicitly pins `X-GitHub-Api-Version: 2026-03-10`. Secret values are unavailable by API design. Variable endpoint responses do contain values, but the helper immediately reduces every item to its name and source class. It suppresses `gh` stderr on API failure so provider responses are not copied into CI logs. Before creating the private output tree, it also rejects symlinked ancestors so a checkout-controlled path cannot redirect recursive directory creation.
 
 Example manifest (paths only):
 
