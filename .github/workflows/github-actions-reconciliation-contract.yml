@@ -6,9 +6,11 @@ on:
       - 'actions/github-actions-reconcile/**'
       - 'contracts/github-actions-reconciliation/**'
       - 'scripts/github-actions-reconciliation.mjs'
+      - 'scripts/inventory-github-actions-config.mjs'
       - 'scripts/run-github-actions-reconciliation.mjs'
       - 'scripts/push-github-actions-fallbacks.mjs'
       - 'tests/github-actions-reconciliation.test.mjs'
+      - 'tests/github-actions-inventory.test.mjs'
       - '.github/workflows/github-actions-reconciliation-contract.yml'
   push:
     branches: [main]
@@ -16,9 +18,11 @@ on:
       - 'actions/github-actions-reconcile/**'
       - 'contracts/github-actions-reconciliation/**'
       - 'scripts/github-actions-reconciliation.mjs'
+      - 'scripts/inventory-github-actions-config.mjs'
       - 'scripts/run-github-actions-reconciliation.mjs'
       - 'scripts/push-github-actions-fallbacks.mjs'
       - 'tests/github-actions-reconciliation.test.mjs'
+      - 'tests/github-actions-inventory.test.mjs'
       - '.github/workflows/github-actions-reconciliation-contract.yml'
 
 permissions:
@@ -40,7 +44,7 @@ jobs:
           node-version: '22.16.0'
 
       - name: Run reconciliation adversarial tests
-        run: node --test tests/github-actions-reconciliation.test.mjs
+        run: node --test tests/github-actions-reconciliation.test.mjs tests/github-actions-inventory.test.mjs
 
       - name: Install exact TJSV contract checker
         shell: bash
