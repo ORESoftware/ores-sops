@@ -14,6 +14,7 @@ enum DiagnosticLevel {
 enum DiagnosticEvent {
   coreMissing: "core_missing",
   configMissing: "config_missing",
+  configInvalid: "config_invalid",
   dependencyMissing: "dependency_missing",
   argvAdmissionRejected: "argv_admission_rejected",
   environmentConflict: "environment_conflict",
