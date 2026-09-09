@@ -13,11 +13,19 @@ chmod +x "${TMP}/ores-sops" "${TMP}/scripts/ores-sops-telemetry"
 
 cat >"${TMP}/bin/flags2env" <<'EOF'
 #!/usr/bin/env bash
+if [[ "${1:-}" == "audit" ]]; then
+  if [[ "${FLAGS2ENV_TEST_AUDIT_FAIL:-0}" == "1" ]]; then
+    printf 'synthetic config audit detail that must stay hidden\n' >&2
+    exit 2
+  fi
+  printf '{"ok":true}\n'
+  exit 0
+fi
 if [[ "${FLAGS2ENV_TEST_FAIL:-0}" == "1" ]]; then
   printf 'unsafe parser echo: %s\n' "${SYNTHETIC_SECRET_ARG:-not-set}" >&2
   exit 2
 fi
-exit 0
+printf '{"ORES_SOPS_UNKNOWN_OPTIONS":"[]","ORES_SOPS_PARSE_ERRORS":"[]"}\n'
 EOF
 chmod +x "${TMP}/bin/flags2env"
 
@@ -30,6 +38,19 @@ chmod +x "${TMP}/scripts/ores-sops-core"
 
 export PATH="${TMP}/bin:${PATH}"
 export CORE_ARGS_CAPTURE="${TMP}/core-args"
+
+# A broken .cli-flags.toml audit is a startup failure and raw audit output is hidden.
+rm -f "${CORE_ARGS_CAPTURE}"
+if FLAGS2ENV_TEST_AUDIT_FAIL=1 "${TMP}/ores-sops" status >"${TMP}/out" 2>"${TMP}/err"; then
+  echo "expected config audit failure" >&2
+  exit 1
+fi
+grep -q '"event":"config_invalid"' "${TMP}/err"
+if grep -q 'synthetic config audit detail' "${TMP}/err"; then
+  echo "config audit output leaked to stderr" >&2
+  exit 1
+fi
+[[ ! -e "${CORE_ARGS_CAPTURE}" ]]
 
 # Required environment admission logs the key name, never a missing/secret value.
 if ORES_SOPS_ENVIRONMENT= "${TMP}/ores-sops" use >"${TMP}/out" 2>"${TMP}/err"; then
