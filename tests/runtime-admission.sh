@@ -42,7 +42,7 @@ fi
 command_name=""
 for token in "$@"; do
   case "${token}" in
-    init|use|refresh|encrypt|edit|sync-keys|diff|status|lock|verify|precommit|install-hooks|help|version)
+    init|use|refresh|encrypt|edit|sync-keys|diff|status|lock|verify|precommit|ensure-dec|install-hooks|help|version)
       command_name="${token}"
       break
       ;;
@@ -118,6 +118,22 @@ fi
 assert_event environment_conflict "${TMP}/err"
 [[ ! -e "${CORE_ARGS_CAPTURE}" ]]
 
+case_label invalid-positional-profile-redaction
+# A parser implementation that omits the operand from its closed positional
+# channel must still not let an invalid positional profile reach the core.
+invalid_positional='synthetic-secret-profile'
+rm -f "${CORE_ARGS_CAPTURE}"
+if "${TMP}/ores-sops" use "${invalid_positional}" >"${TMP}/out" 2>"${TMP}/err"; then
+  echo "expected invalid positional environment to fail" >&2
+  exit 1
+fi
+assert_event argv_admission_rejected "${TMP}/err"
+if grep -Fq "${invalid_positional}" "${TMP}/err"; then
+  echo "invalid positional environment leaked to stderr" >&2
+  exit 1
+fi
+[[ ! -e "${CORE_ARGS_CAPTURE}" ]]
+
 case_label invalid-env-redaction
 # Invalid process-env values are not reflected into telemetry or human errors.
 invalid_profile='../../synthetic-secret-profile'
@@ -130,6 +146,11 @@ if grep -Fq "${invalid_profile}" "${TMP}/err"; then
   echo "invalid environment value leaked to stderr" >&2
   exit 1
 fi
+
+case_label ensure-dec-admitted
+"${TMP}/ores-sops" ensure-dec >"${TMP}/out" 2>"${TMP}/err"
+grep -q '^ensure-dec$' "${CORE_ARGS_CAPTURE}"
+grep -q '"command":"ensure-dec"' "${TMP}/err"
 
 case_label unknown-telemetry-event
 # The telemetry helper itself rejects unknown events without echoing them.
