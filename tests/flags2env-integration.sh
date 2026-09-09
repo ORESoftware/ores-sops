@@ -11,7 +11,11 @@ command -v node >/dev/null 2>&1 || {
   exit 2
 }
 
-# Exercise the real config auditor before building the isolated wrapper fixture.
+case_label() {
+  printf 'flags2env-case: %s\n' "$1"
+}
+
+case_label config-audit
 (cd "${ROOT}" && flags2env audit ./.cli-flags.toml >/dev/null)
 
 TMP="$(mktemp -d)"
@@ -29,8 +33,6 @@ exit "${CORE_EXIT_CODE:-0}"
 EOF
 chmod +x "${TMP}/scripts/ores-sops-core"
 
-# If dotenv loading ever regresses, the canonical parser can see this file.
-# ores-sops deliberately disables that lane in .cli-flags.toml.
 cat >"${TMP}/.env" <<'EOF'
 ORES_SOPS_ENVIRONMENT=prod
 EOF
@@ -38,16 +40,16 @@ EOF
 export CORE_ARGS_CAPTURE="${TMP}/core-args"
 unset ORES_SOPS_ENVIRONMENT || true
 
-# Valid scoped flags must pass and normalize into the legacy core shape.
+case_label environment-flag
 "${TMP}/ores-sops" use --environment=stage --force >"${TMP}/out" 2>"${TMP}/err"
 grep -q '^use --force stage$' "${CORE_ARGS_CAPTURE}"
 grep -q '"event":"command_completed"' "${TMP}/err"
 
-# Positional environment remains a supported public form.
+case_label positional-environment
 "${TMP}/ores-sops" use dev --force >"${TMP}/out" 2>"${TMP}/err"
 grep -q '^use --force dev$' "${CORE_ARGS_CAPTURE}"
 
-# Unknown flags must be rejected by the real flags2env unknown-options channel.
+case_label unknown-option
 rm -f "${CORE_ARGS_CAPTURE}"
 if "${TMP}/ores-sops" use dev --synthetic-unknown-option >"${TMP}/out" 2>"${TMP}/err"; then
   echo "expected real flags2env to reject an unknown option" >&2
@@ -60,15 +62,14 @@ if grep -q 'synthetic-unknown-option' "${TMP}/err"; then
   exit 1
 fi
 
-# Invalid typed values must be rejected through the errors channel.
+case_label invalid-bool
 if "${TMP}/ores-sops" use dev --force=definitely-not-a-bool >"${TMP}/out" 2>"${TMP}/err"; then
   echo "expected real flags2env to reject an invalid bool" >&2
   exit 1
 fi
 grep -q '"event":"argv_admission_rejected"' "${TMP}/err"
 
-# Extra operands are not unknown options; the positionals channel must reject
-# them rather than relying on the legacy core to notice or ignore them.
+case_label extra-positional
 rm -f "${CORE_ARGS_CAPTURE}"
 if "${TMP}/ores-sops" status synthetic-extra-operand >"${TMP}/out" 2>"${TMP}/err"; then
   echo "expected extra positional operand to fail" >&2
@@ -81,7 +82,7 @@ if grep -q 'synthetic-extra-operand' "${TMP}/err"; then
   exit 1
 fi
 
-# A bare -- must not create a bypass around strict admission.
+case_label dashdash-bypass
 if "${TMP}/ores-sops" status -- --synthetic-after-dashdash >"${TMP}/out" 2>"${TMP}/err"; then
   echo "expected operand after bare -- to fail" >&2
   exit 1
@@ -92,17 +93,19 @@ if grep -q 'synthetic-after-dashdash' "${TMP}/err"; then
   exit 1
 fi
 
-# Top-level aliases are normalized only for admission; the core still receives
-# the original public argv so legacy behavior remains intact.
+case_label help-alias
 "${TMP}/ores-sops" --help >"${TMP}/out" 2>"${TMP}/err"
 grep -q '^--help$' "${CORE_ARGS_CAPTURE}"
+
+case_label version-alias
 "${TMP}/ores-sops" --version >"${TMP}/out" 2>"${TMP}/err"
 grep -q '^--version$' "${CORE_ARGS_CAPTURE}"
+
+case_label empty-argv
 "${TMP}/ores-sops" >"${TMP}/out" 2>"${TMP}/err"
 [[ ! -s "${CORE_ARGS_CAPTURE}" ]]
 
-# Process-env fallback remains explicit; the local .env sentinel must not become
-# the wrapper's environment source when ORES_SOPS_ENVIRONMENT is unset.
+case_label dotenv-disabled
 unset ORES_SOPS_ENVIRONMENT || true
 rm -f "${CORE_ARGS_CAPTURE}"
 if "${TMP}/ores-sops" use --force >"${TMP}/out" 2>"${TMP}/err"; then
@@ -112,6 +115,7 @@ fi
 grep -q '"event":"required_env_missing"' "${TMP}/err"
 [[ ! -e "${CORE_ARGS_CAPTURE}" ]]
 
+case_label process-env-fallback
 ORES_SOPS_ENVIRONMENT=prod "${TMP}/ores-sops" use --force >"${TMP}/out" 2>"${TMP}/err"
 grep -q '^use --force prod$' "${CORE_ARGS_CAPTURE}"
 
