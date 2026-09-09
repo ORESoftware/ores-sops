@@ -34,7 +34,7 @@
         "command": { "type": "string" },
         "profile": { "type": "string" },
         "key": { "type": "string" },
-        "exitCode": { "type": "integer" }
+        "exitCode": { "type": "integer", "minimum": 0, "maximum": 255 }
       },
       "required": ["command", "profile", "key", "exitCode"],
       "unevaluatedProperties": false
