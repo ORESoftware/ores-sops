@@ -1,0 +1,13 @@
+{
+  "schema": "ores.sops/diagnostic/v1",
+  "level": "info",
+  "component": "ores-sops",
+  "event": "command_completed",
+  "message": "ores-sops command completed",
+  "details": {
+    "command": "status",
+    "profile": "",
+    "key": "",
+    "exitCode": 0
+  }
+}
