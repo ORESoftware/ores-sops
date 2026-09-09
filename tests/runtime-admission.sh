@@ -31,6 +31,7 @@ chmod +x "${TMP}/scripts/ores-sops-core"
 export PATH="${TMP}/bin:${PATH}"
 export CORE_ARGS_CAPTURE="${TMP}/core-args"
 
+# Required environment admission logs the key name, never a missing/secret value.
 if ORES_SOPS_ENVIRONMENT= "${TMP}/ores-sops" use >"${TMP}/out" 2>"${TMP}/err"; then
   echo "expected missing environment to fail" >&2
   exit 1
@@ -38,6 +39,7 @@ fi
 grep -q '"event":"required_env_missing"' "${TMP}/err"
 grep -q '"key":"ORES_SOPS_ENVIRONMENT"' "${TMP}/err"
 
+# Parser-controlled stderr is suppressed because argv may contain credentials.
 SYNTHETIC_SECRET_ARG='synthetic-do-not-log-value' FLAGS2ENV_TEST_FAIL=1 \
   "${TMP}/ores-sops" use dev >"${TMP}/out" 2>"${TMP}/err" || true
 if grep -q 'synthetic-do-not-log-value' "${TMP}/err"; then
@@ -46,9 +48,59 @@ if grep -q 'synthetic-do-not-log-value' "${TMP}/err"; then
 fi
 grep -q '"event":"argv_admission_rejected"' "${TMP}/err"
 
+# Environment fallback is normalized into the legacy core argv shape.
 ORES_SOPS_ENVIRONMENT=stage "${TMP}/ores-sops" use --force >"${TMP}/out" 2>"${TMP}/err"
 grep -q '^use --force stage$' "${CORE_ARGS_CAPTURE}"
 grep -q '"profile":"stage"' "${TMP}/err"
+
+# Conflicting public profile inputs fail closed before the core executes.
+rm -f "${CORE_ARGS_CAPTURE}"
+if "${TMP}/ores-sops" use dev --environment=prod >"${TMP}/out" 2>"${TMP}/err"; then
+  echo "expected conflicting environments to fail" >&2
+  exit 1
+fi
+grep -q '"event":"environment_conflict"' "${TMP}/err"
+[[ ! -e "${CORE_ARGS_CAPTURE}" ]]
+
+# Invalid process-env values are not reflected into telemetry or human errors.
+invalid_profile='../../synthetic-secret-profile'
+if ORES_SOPS_ENVIRONMENT="${invalid_profile}" "${TMP}/ores-sops" use >"${TMP}/out" 2>"${TMP}/err"; then
+  echo "expected invalid environment to fail" >&2
+  exit 1
+fi
+grep -q '"event":"invalid_environment"' "${TMP}/err"
+if grep -Fq "${invalid_profile}" "${TMP}/err"; then
+  echo "invalid environment value leaked to stderr" >&2
+  exit 1
+fi
+
+# The telemetry helper itself rejects unknown events without echoing them.
+unknown_event='synthetic-secret-event-name'
+if "${TMP}/scripts/ores-sops-telemetry" "${unknown_event}" use dev '' 2 >"${TMP}/out" 2>"${TMP}/err"; then
+  echo "expected unknown telemetry event to fail" >&2
+  exit 1
+fi
+[[ ! -s "${TMP}/err" ]]
+
+# Known events sanitize every metadata lane and bound the exit code.
+"${TMP}/scripts/ores-sops-telemetry" command_failed \
+  'synthetic-secret-command' 'synthetic-secret-profile' 'synthetic-secret-key' 999 \
+  >"${TMP}/out" 2>"${TMP}/err"
+for secret in synthetic-secret-command synthetic-secret-profile synthetic-secret-key; do
+  if grep -Fq "${secret}" "${TMP}/err"; then
+    echo "telemetry metadata leaked: ${secret}" >&2
+    exit 1
+  fi
+done
+grep -q '"command":"unknown"' "${TMP}/err"
+grep -q '"profile":""' "${TMP}/err"
+grep -q '"key":"redacted-key-name"' "${TMP}/err"
+grep -q '"exitCode":1' "${TMP}/err"
+
+# Explicit telemetry disablement must be silent and must not affect command success.
+ORES_SOPS_TELEMETRY=0 "${TMP}/ores-sops" status >"${TMP}/out" 2>"${TMP}/err"
+[[ ! -s "${TMP}/err" ]]
+grep -q '^status$' "${CORE_ARGS_CAPTURE}"
 
 if ! grep -Eq '^files[[:space:]]*=[[:space:]]*\[\]' "${ROOT}/.cli-flags.toml"; then
   echo ".cli-flags.toml must disable dotenv loading" >&2
