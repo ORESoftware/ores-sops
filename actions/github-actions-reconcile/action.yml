@@ -1,0 +1,16 @@
+name: Reconcile GitHub Actions configuration with env/enc
+description: Resolve explicit GitHub fallback values under an authoritative decrypted env/enc environment and emit value-blind drift telemetry.
+inputs:
+  manifest:
+    description: Path to the reconciliation manifest. The manifest contains paths and key-name metadata, never secret values.
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Reconcile environment
+      shell: bash
+      env:
+        ORES_SOPS_GHA_RECONCILE_INPUT: ${{ inputs.manifest }}
+      run: |
+        set -euo pipefail
+        node "$GITHUB_ACTION_PATH/../../scripts/run-github-actions-reconciliation.mjs"
