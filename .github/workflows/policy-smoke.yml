@@ -22,6 +22,20 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Set up Node for canonical flags2env
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install canonical flags-2-env from pinned GitHub source
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --no-save --ignore-scripts=false \
+            https://github.com/flags-2-env/flags-2-env/archive/8892365548557e437d81a0d44d650fb9abff6c44.tar.gz
+          printf '%s\n' "$GITHUB_WORKSPACE/node_modules/.bin" >> "$GITHUB_PATH"
+          "$GITHUB_WORKSPACE/node_modules/.bin/flags2env" audit ./.cli-flags.toml >/dev/null
+
       - name: Shell syntax
         run: |
           bash -n ./ores-sops
