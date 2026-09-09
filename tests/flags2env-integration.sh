@@ -76,6 +76,25 @@ case_label positional-environment
 "${TMP}/ores-sops" use dev --force >"${TMP}/out" 2>"${TMP}/err"
 grep -q '^use --force dev$' "${CORE_ARGS_CAPTURE}"
 
+case_label invalid-positional-environment
+invalid_profile='synthetic-invalid-profile'
+rm -f "${CORE_ARGS_CAPTURE}"
+if "${TMP}/ores-sops" use "${invalid_profile}" >"${TMP}/out" 2>"${TMP}/err"; then
+  echo "expected invalid positional environment to fail" >&2
+  exit 1
+fi
+grep -q '"event":"argv_admission_rejected"' "${TMP}/err"
+[[ ! -e "${CORE_ARGS_CAPTURE}" ]]
+if grep -Fq "${invalid_profile}" "${TMP}/err"; then
+  echo "invalid positional environment leaked to wrapper stderr" >&2
+  exit 1
+fi
+
+case_label ensure-dec-command
+"${TMP}/ores-sops" ensure-dec >"${TMP}/out" 2>"${TMP}/err"
+grep -q '^ensure-dec$' "${CORE_ARGS_CAPTURE}"
+grep -q '"command":"ensure-dec"' "${TMP}/err"
+
 case_label unknown-option
 rm -f "${CORE_ARGS_CAPTURE}"
 if "${TMP}/ores-sops" use dev --synthetic-unknown-option >"${TMP}/out" 2>"${TMP}/err"; then
