@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "ores-sops.github-actions-reconciliation.authored.schema.json",
+  "$defs": {
+    "EnvironmentName": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$id": "EnvironmentName",
+      "type": "string",
+      "enum": ["dev", "stage", "prod"]
+    },
+    "GitHubSource": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$id": "GitHubSource",
+      "type": "string",
+      "enum": [
+        "github_environment_secret",
+        "github_repository_secret",
+        "github_organization_secret",
+        "github_environment_variable",
+        "github_repository_variable",
+        "github_organization_variable"
+      ]
+    },
+    "ResolutionSource": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$id": "ResolutionSource",
+      "type": "string",
+      "enum": ["env_enc", "github_fallback"]
+    },
+    "ConfigDecision": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$id": "ConfigDecision",
+      "type": "object",
+      "properties": {
+        "key": {"type": "string"},
+        "resolution": {"$ref": "ResolutionSource"},
+        "githubSource": {"$ref": "GitHubSource"}
+      },
+      "required": ["key", "resolution"],
+      "unevaluatedProperties": false
+    },
+    "GitHubOnlyObservation": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$id": "GitHubOnlyObservation",
+      "type": "object",
+      "properties": {
+        "key": {"type": "string"},
+        "githubSource": {"$ref": "GitHubSource"},
+        "reason": {"type": "string", "const": "missing_from_env_enc"}
+      },
+      "required": ["key", "githubSource", "reason"],
+      "unevaluatedProperties": false
+    },
+    "GitHubActionsReconciliationReceipt": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$id": "GitHubActionsReconciliationReceipt",
+      "type": "object",
+      "properties": {
+        "schema": {"type": "string", "const": "ores-sops.github-actions-reconciliation/v1"},
+        "repository": {"type": "string"},
+        "environment": {"$ref": "EnvironmentName"},
+        "authoritativePath": {"type": "string"},
+        "decisions": {"type": "array", "items": {"$ref": "ConfigDecision"}},
+        "observations": {"type": "array", "items": {"$ref": "GitHubOnlyObservation"}}
+      },
+      "required": ["schema", "repository", "environment", "authoritativePath", "decisions", "observations"],
+      "unevaluatedProperties": false
+    }
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "schema": "ores-sops.github-actions-reconciliation/v1",
+  "repository": "ORESoftware/example",
+  "environment": "prod",
+  "authoritativePath": "env/enc/prod.env.enc",
+  "decisions": []
+}
