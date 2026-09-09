@@ -36,13 +36,64 @@ esac
 if ! command -v flags2env >/dev/null 2>&1; then
   fail dependency_missing "required dependency flags2env is not available" "flags2env" "${command_name}"
 fi
+if ! command -v node >/dev/null 2>&1; then
+  fail dependency_missing "required dependency node is not available" "node" "${command_name}"
+fi
 
-# Admission only. Do not eval/export flags2env output: .cli-flags.toml explicitly
-# disables dotenv loading and the internal core retains runtime env ownership.
-# Suppress parser output because it may contain attacker-controlled argv.
-if ! (cd "${SCRIPT_DIR}" && flags2env export -- "$0" "$@" >/dev/null 2>&1); then
+# The repository-root contract must itself be admissible before parsing argv.
+# Suppress audit output: diagnostics report only the fixed failure class.
+if ! (cd "${SCRIPT_DIR}" && flags2env audit "${CONFIG}" >/dev/null 2>&1); then
+  fail config_invalid ".cli-flags.toml admission audit failed" "" "${command_name}"
+fi
+
+# Normalize top-level help/version aliases so flags2env emits its structured JSON
+# rather than rendering a help table. No other argv is rewritten here.
+admission_args=("$0" "$@")
+case "${1:-}" in
+  -h|--help) admission_args=("$0" help) ;;
+  -V|--version) admission_args=("$0" version) ;;
+esac
+
+# Parse the real argv through flags2env and consume only its closed unknown/error
+# channels. Parser stdout is piped directly into a bounded JSON checker; it is
+# never eval'd, exported, logged, written to disk, or placed on another process'
+# argv. Parser stderr is suppressed because it may reflect attacker-controlled
+# command-line input.
+if ! (
+  cd "${SCRIPT_DIR}"
+  flags2env "${admission_args[@]}" 2>/dev/null |
+    node -e '
+      let text = "";
+      process.stdin.setEncoding("utf8");
+      process.stdin.on("data", (chunk) => {
+        text += chunk;
+        if (text.length > 262144) process.exit(2);
+      });
+      process.stdin.on("end", () => {
+        try {
+          const parsed = JSON.parse(text);
+          const decodeList = (key) => {
+            const raw = parsed[key] ?? "[]";
+            if (typeof raw !== "string") return null;
+            const value = JSON.parse(raw);
+            return Array.isArray(value) ? value : null;
+          };
+          const unknown = decodeList("ORES_SOPS_UNKNOWN_OPTIONS");
+          const errors = decodeList("ORES_SOPS_PARSE_ERRORS");
+          if (!unknown || !errors || unknown.length !== 0 || errors.length !== 0) {
+            process.exit(2);
+          }
+        } catch {
+          process.exit(2);
+        }
+      });
+    ' 2>/dev/null
+); then
   fail argv_admission_rejected "command-line admission failed" "" "${command_name}"
 fi
+
+[[ "${command_name}" != "unknown" ]] || \
+  fail argv_admission_rejected "unknown command" "" "unknown"
 
 args=("$@")
 safe_profile=""
