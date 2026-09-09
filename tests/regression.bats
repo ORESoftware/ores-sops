@@ -69,7 +69,7 @@ EOF_IGNORE
   run ores-sops "$invalid_command"
   [ "$status" -ne 0 ]
   [[ "$output" == *'"event":"argv_admission_rejected"'* ]]
-  [[ "$output" == *"unknown command"* ]]
+  [[ "$output" == *"command-line admission failed"* ]]
   [[ "$output" != *"$invalid_command"* ]]
   [ ! -e env/dec ]
 }
