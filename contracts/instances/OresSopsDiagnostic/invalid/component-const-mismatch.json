@@ -1,0 +1,13 @@
+{
+  "schema": "ores.sops/diagnostic/v1",
+  "level": "error",
+  "component": "other-runtime",
+  "event": "command_failed",
+  "message": "ores-sops command failed",
+  "details": {
+    "command": "encrypt",
+    "profile": "prod",
+    "key": "",
+    "exitCode": 2
+  }
+}

@@ -8,22 +8,77 @@
 
   outputs = { self, nixpkgs, flake-utils }:
     let
+      flags2envRevision = "8892365548557e437d81a0d44d650fb9abff6c44";
+      flags2envSrc = builtins.fetchGit {
+        url = "https://github.com/flags-2-env/flags-2-env.git";
+        rev = flags2envRevision;
+      };
+
       overlay = final: prev: {
-        ores-sops = final.writeShellApplication {
-          name = "ores-sops";
-          # Pinned into the closure so behaviour is identical everywhere and
-          # nothing has to be installed on the host. git hooks in particular run
-          # with a minimal PATH.
-          runtimeInputs = with final; [
-            sops
-            age
-            git
-            coreutils
-            gnugrep
-            gnused
-            diffutils
+        flags2env = final.stdenv.mkDerivation {
+          pname = "flags2env";
+          version = "0.3.0-${builtins.substring 0 12 flags2envRevision}";
+          src = flags2envSrc;
+
+          nativeBuildInputs = with final; [
+            makeWrapper
+            nodejs_22
+            node-gyp
+            python3
           ];
-          text = builtins.readFile ./ores-sops;
+
+          buildPhase = ''
+            runHook preBuild
+            export HOME="$TMPDIR"
+            export npm_config_nodedir="${final.nodejs_22}"
+            export npm_config_python="${final.python3}/bin/python3"
+            (cd clients/nodejs && node-gyp rebuild)
+            runHook postBuild
+          '';
+
+          installPhase = ''
+            runHook preInstall
+            mkdir -p "$out/bin" "$out/libexec/flags2env/build/Release"
+            install -m 0755 clients/nodejs/cli.mjs "$out/libexec/flags2env/cli.mjs"
+            install -m 0644 clients/nodejs/lib.mjs "$out/libexec/flags2env/lib.mjs"
+            install -m 0644 clients/nodejs/build/Release/flags2env.node \
+              "$out/libexec/flags2env/build/Release/flags2env.node"
+            makeWrapper ${final.nodejs_22}/bin/node "$out/bin/flags2env" \
+              --add-flags "$out/libexec/flags2env/cli.mjs"
+            ln -s flags2env "$out/bin/f2e"
+            runHook postInstall
+          '';
+        };
+
+        ores-sops = final.stdenvNoCC.mkDerivation {
+          pname = "ores-sops";
+          version = "0.4.0";
+          src = ./.;
+          dontBuild = true;
+          nativeBuildInputs = [ final.makeWrapper ];
+
+          installPhase = ''
+            runHook preInstall
+            mkdir -p "$out/bin" "$out/libexec/ores-sops/scripts"
+            install -m 0755 ores-sops "$out/libexec/ores-sops/ores-sops"
+            install -m 0644 .cli-flags.toml "$out/libexec/ores-sops/.cli-flags.toml"
+            install -m 0755 scripts/ores-sops-core "$out/libexec/ores-sops/scripts/ores-sops-core"
+            install -m 0755 scripts/ores-sops-telemetry "$out/libexec/ores-sops/scripts/ores-sops-telemetry"
+            makeWrapper "$out/libexec/ores-sops/ores-sops" "$out/bin/ores-sops" \
+              --prefix PATH : ${final.lib.makeBinPath (with final; [
+                flags2env
+                nodejs_22
+                bash
+                sops
+                age
+                git
+                coreutils
+                gnugrep
+                gnused
+                diffutils
+              ])}
+            runHook postInstall
+          '';
         };
 
         ores-sops-fleet-audit = final.writeShellApplication {
@@ -108,6 +163,7 @@
     // flake-utils.lib.eachDefaultSystem (system:
       let pkgs = import nixpkgs { inherit system; overlays = [ overlay ]; };
       in {
+        packages.flags2env = pkgs.flags2env;
         packages.ores-sops = pkgs.ores-sops;
         packages.ores-sops-fleet-audit = pkgs.ores-sops-fleet-audit;
         packages.ores-sops-access-audit = pkgs.ores-sops-access-audit;
@@ -125,6 +181,7 @@
 
         devShells.default = pkgs.mkShell {
           packages = with pkgs; [
+            flags2env
             ores-sops
             ores-sops-fleet-audit
             ores-sops-access-audit
@@ -148,8 +205,27 @@
         checks.helper-shellcheck = pkgs.runCommand "helper-shellcheck"
           { nativeBuildInputs = [ pkgs.shellcheck ]; } ''
           shellcheck --shell=bash ${./ores-sops}
+          shellcheck --shell=bash ${./scripts/ores-sops-core}
+          shellcheck --shell=bash ${./scripts/ores-sops-telemetry}
           shellcheck --shell=bash ${./scripts/fleet-audit.sh}
           shellcheck --shell=bash ${./scripts/access-audit.sh}
+          shellcheck --shell=bash ${./tests/runtime-admission.sh}
+          shellcheck --shell=bash ${./tests/flags2env-integration.sh}
+          touch "$out"
+        '';
+
+        checks.flags2env-package = pkgs.runCommand "flags2env-package"
+          { nativeBuildInputs = [ pkgs.flags2env ]; } ''
+          mkdir work
+          cd work
+          cp ${./.cli-flags.toml} .cli-flags.toml
+          flags2env audit ./.cli-flags.toml >/dev/null
+          touch "$out"
+        '';
+
+        checks.packaged-runtime-admission = pkgs.runCommand "packaged-runtime-admission"
+          { nativeBuildInputs = [ pkgs.ores-sops ]; } ''
+          ores-sops --version >/dev/null
           touch "$out"
         '';
 

@@ -13,13 +13,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Shell syntax
+      - name: Shell syntax and executable boundary
         run: |
           bash -n ores-sops
           bash -n scripts/ores-sops-core
           bash -n scripts/ores-sops-telemetry
           bash -n tests/runtime-admission.sh
           bash -n tests/flags2env-integration.sh
+          test -x ores-sops
+          test -x scripts/ores-sops-core
+          test -x scripts/ores-sops-telemetry
       - name: Runtime admission and telemetry redaction
         run: bash tests/runtime-admission.sh
 
@@ -43,7 +46,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Enforce independent TypeSpec and JSON Schema authorities with TJSV
-        uses: ORESoftware/typespec-json-schema-validator@a4b731fbf82c4d162abd74fd03758fa32bb76176
+        uses: ORESoftware/typespec-json-schema-validator@f8b68ccc9d88fbe3843106b8d79fd9e1dbac3256
         with:
           typespec: contracts/main.tsp
           schema: contracts/authored.schema.json

@@ -90,6 +90,7 @@ type = "string"
 [commands.lock]
 [commands.verify]
 [commands.precommit]
+[commands.ensure-dec]
 
 [commands.install-hooks]
 [commands.install-hooks.flags.quiet]

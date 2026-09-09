@@ -18,6 +18,9 @@ case_label() {
 safe_parser_summary() {
   # Diagnostic helper for CI: it reports only command identity and channel
   # cardinalities, never flag values, argv strings, dotenv values, or errors.
+  # The JavaScript body must remain a literal shell string: its template-literal
+  # ${...} expressions belong to Node, not Bash.
+  # shellcheck disable=SC2016
   flags2env "$@" 2>/dev/null | node -e '
     let text = "";
     process.stdin.setEncoding("utf8");
@@ -73,6 +76,25 @@ case_label positional-environment
 "${TMP}/ores-sops" use dev --force >"${TMP}/out" 2>"${TMP}/err"
 grep -q '^use --force dev$' "${CORE_ARGS_CAPTURE}"
 
+case_label invalid-positional-environment
+invalid_profile='synthetic-invalid-profile'
+rm -f "${CORE_ARGS_CAPTURE}"
+if "${TMP}/ores-sops" use "${invalid_profile}" >"${TMP}/out" 2>"${TMP}/err"; then
+  echo "expected invalid positional environment to fail" >&2
+  exit 1
+fi
+grep -q '"event":"argv_admission_rejected"' "${TMP}/err"
+[[ ! -e "${CORE_ARGS_CAPTURE}" ]]
+if grep -Fq "${invalid_profile}" "${TMP}/err"; then
+  echo "invalid positional environment leaked to wrapper stderr" >&2
+  exit 1
+fi
+
+case_label ensure-dec-command
+"${TMP}/ores-sops" ensure-dec >"${TMP}/out" 2>"${TMP}/err"
+grep -q '^ensure-dec$' "${CORE_ARGS_CAPTURE}"
+grep -q '"command":"ensure-dec"' "${TMP}/err"
+
 case_label unknown-option
 rm -f "${CORE_ARGS_CAPTURE}"
 if "${TMP}/ores-sops" use dev --synthetic-unknown-option >"${TMP}/out" 2>"${TMP}/err"; then
@@ -127,7 +149,9 @@ grep -q '^--version$' "${CORE_ARGS_CAPTURE}"
 
 case_label empty-argv
 "${TMP}/ores-sops" >"${TMP}/out" 2>"${TMP}/err"
-[[ ! -s "${CORE_ARGS_CAPTURE}" ]]
+# The test core always writes one trailing newline. Command substitution strips
+# it, so this checks the captured argv payload rather than file byte length.
+[[ "$(cat "${CORE_ARGS_CAPTURE}")" == "" ]]
 
 case_label dotenv-disabled
 unset ORES_SOPS_ENVIRONMENT || true
