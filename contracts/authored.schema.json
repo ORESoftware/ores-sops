@@ -8,6 +8,23 @@
       "type": "string",
       "enum": ["info", "warn", "error"]
     },
+    "DiagnosticEvent": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$id": "DiagnosticEvent",
+      "type": "string",
+      "enum": [
+        "core_missing",
+        "config_missing",
+        "dependency_missing",
+        "argv_admission_rejected",
+        "environment_conflict",
+        "required_env_missing",
+        "invalid_environment",
+        "command_started",
+        "command_completed",
+        "command_failed"
+      ]
+    },
     "DiagnosticDetails": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "$id": "DiagnosticDetails",
@@ -29,7 +46,7 @@
         "schema": { "type": "string", "const": "ores.sops/diagnostic/v1" },
         "level": { "$ref": "DiagnosticLevel" },
         "component": { "type": "string", "const": "ores-sops" },
-        "event": { "type": "string" },
+        "event": { "$ref": "DiagnosticEvent" },
         "message": { "type": "string" },
         "details": { "$ref": "DiagnosticDetails" }
       },
