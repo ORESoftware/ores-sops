@@ -52,20 +52,25 @@ EOF_IGNORE
   rm -rf env/dec
   run ores-sops --version
   [ "$status" -eq 0 ]
-  [[ "$output" == ores-sops\ * ]]
+  [[ "$output" == *"ores-sops "* ]]
+  [[ "$output" == *'"command":"version"'* ]]
   [ ! -e env/dec ]
 
   run ores-sops help
   [ "$status" -eq 0 ]
   [[ "$output" == *"ensure-dec"* ]]
+  [[ "$output" == *'"command":"help"'* ]]
   [ ! -e env/dec ]
 }
 
-@test "unknown commands fail without creating env/dec" {
+@test "unknown commands fail redacted without creating env/dec" {
+  invalid_command='synthetic-unknown-command'
   rm -rf env/dec
-  run ores-sops frobnicate
+  run ores-sops "$invalid_command"
   [ "$status" -ne 0 ]
-  [[ "$output" == *"unknown command 'frobnicate'"* ]]
+  [[ "$output" == *'"event":"argv_admission_rejected"'* ]]
+  [[ "$output" == *"unknown command"* ]]
+  [[ "$output" != *"$invalid_command"* ]]
   [ ! -e env/dec ]
 }
 
