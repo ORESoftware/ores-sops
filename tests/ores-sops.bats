@@ -48,10 +48,47 @@ EOF_IGNORE
   git commit -qm baseline
 }
 
-@test "only dev and prod environment names are accepted" {
-  run ores-sops use app
+@test "every managed command recreates ignored env/dec with mode 0700" {
+  commands=(
+    "ensure-dec"
+    "status"
+    "verify"
+    "precommit"
+    "install-hooks --quiet"
+    "lock"
+  )
+
+  for command in "${commands[@]}"; do
+    rm -rf env/dec
+    run bash -c "ores-sops $command"
+    [ "$status" -eq 0 ]
+    [ -d env/dec ]
+    [ ! -L env/dec ]
+    [ "$(stat -c '%a' env/dec 2>/dev/null || stat -f '%Lp' env/dec)" = "700" ]
+    git check-ignore --no-index -q env/dec/runtime.env
+    [ -z "$(git ls-files -- env/dec)" ]
+  done
+}
+
+@test "runtime bootstrap refuses a symlinked env/dec without touching its target" {
+  outside="$BATS_TEST_TMPDIR/outside-runtime-dec"
+  mkdir -p "$outside"
+  rm -rf env/dec
+  ln -s "$outside" env/dec
+
+  run ores-sops status
   [ "$status" -ne 0 ]
-  [[ "$output" == *"unsupported environment 'app'"* ]]
+  [[ "$output" == *"managed path must not be a symlink"* ]]
+  [ -z "$(find "$outside" -mindepth 1 -maxdepth 1 -print -quit)" ]
+}
+
+@test "only canonical environment names are accepted and redacted" {
+  invalid_profile='synthetic-noncanonical-profile'
+  run ores-sops use "$invalid_profile"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'"event":"argv_admission_rejected"'* ]]
+  [[ "$output" == *"command-line admission failed"* ]]
+  [[ "$output" != *"$invalid_profile"* ]]
 }
 
 @test "use decrypts atomically and creates a relative root symlink" {
@@ -236,6 +273,20 @@ EOF_IGNORE
   [ "$status" -ne 0 ]
   [[ "$output" == *"obvious plaintext assignment"* ]]
 }
+@test "verify accepts an exact empty assignment because it contains no plaintext secret" {
+  printf 'OPTIONAL_PROVIDER_TOKEN=\nsops_mac=ENC[fake]\n' > env/enc/dev.env.enc
+  git add env/enc/dev.env.enc
+  run ores-sops verify
+  [ "$status" -eq 0 ]
+}
+
+@test "verify still rejects quoted placeholder values" {
+  printf 'OPTIONAL_PROVIDER_TOKEN=""\nsops_mac=ENC[fake]\n' > env/enc/dev.env.enc
+  git add env/enc/dev.env.enc
+  run ores-sops verify
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"obvious plaintext assignment"* ]]
+}
 
 @test "verify rejects broad env enc creation rules" {
   cat >> .sops.yaml <<EOF_SOPS
@@ -327,7 +378,7 @@ EOF_OLD
   [ "$(grep -c -- "- $other_recipient" .sops.yaml)" = 2 ]
 }
 
-@test "init rejects a malformed recipient instead of writing a policy nobody can use" {
+@test "init rejects a malformed recipient without echoing it" {
   fresh="$BATS_TEST_TMPDIR/bad"
   mkdir -p "$fresh"
   cd "$fresh"
@@ -335,7 +386,8 @@ EOF_OLD
 
   run ores-sops init --recipient age1-not-a-real-key
   [ "$status" -ne 0 ]
-  [[ "$output" == *"not an age public key"* ]]
+  [[ "$output" == *"invalid age public recipient supplied"* ]]
+  [[ "$output" != *"age1-not-a-real-key"* ]]
   [ ! -f .sops.yaml ]
 }
 

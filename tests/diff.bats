@@ -61,8 +61,11 @@ EOF_IGNORE
   [[ "$output" != *"old-secret"* ]]
 }
 
-@test "diff rejects noncanonical environment names" {
-  run ores-sops diff staging
+@test "diff rejects and redacts noncanonical environment names" {
+  invalid_profile='synthetic-noncanonical-profile'
+  run ores-sops diff "$invalid_profile"
   [ "$status" -ne 0 ]
-  [[ "$output" == *"unsupported environment 'staging'"* ]]
+  [[ "$output" == *'"event":"argv_admission_rejected"'* ]]
+  [[ "$output" == *"command-line admission failed"* ]]
+  [[ "$output" != *"$invalid_profile"* ]]
 }

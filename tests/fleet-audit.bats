@@ -129,3 +129,226 @@ EOF_BROAD
   run ores-sops-fleet-audit --strict "$repo"
   [ "$status" -eq 1 ]
 }
+
+@test "provider inventory reports environments without exposing ciphertext values" {
+  repo="$ROOT/providers"
+  init_repo "$repo"
+  write_adopted_policy "$repo"
+  mkdir -p "$repo/env/enc"
+  cat >"$repo/env/enc/dev.env.enc" <<'EOF_DEV'
+AUTH_SENDGRID_API_KEY=ENC[AES256_GCM,data:sendgrid-secret-marker,iv:a,tag:b,type:str]
+AUTH_TWILIO_ACCOUNT_SID=ENC[AES256_GCM,data:twilio-secret-marker,iv:c,tag:d,type:str]
+sops_version=3.13.3
+EOF_DEV
+  cat >"$repo/env/enc/prod.env.enc" <<'EOF_PROD'
+SENDGRID_API_KEY=ENC[AES256_GCM,data:prod-secret-marker,iv:e,tag:f,type:str]
+sops_version=3.13.3
+EOF_PROD
+  git -C "$repo" add env/enc/dev.env.enc env/enc/prod.env.enc
+  git -C "$repo" commit -qm providers
+  chmod 000 "$repo/env/enc/dev.env.enc" "$repo/env/enc/prod.env.enc"
+
+  run ores-sops-fleet-audit --provider-inventory "$repo"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *$'providers\tadopted\t0\t0\t0\texact\tok\tok\t0\tdev+prod\tdev'* ]]
+  [[ "$output" != *"sendgrid-secret-marker"* ]]
+  [[ "$output" != *"twilio-secret-marker"* ]]
+  [[ "$output" != *"prod-secret-marker"* ]]
+}
+
+@test "default scan keeps the original header even when provider names exist" {
+  repo="$ROOT/default-scan"
+  init_repo "$repo"
+  write_adopted_policy "$repo"
+  mkdir -p "$repo/env/enc"
+  cat >"$repo/env/enc/dev.env.enc" <<'EOF_DEV'
+SENDGRID_API_KEY=ENC[AES256_GCM,data:must-not-print,iv:a,tag:b,type:str]
+sops_version=3.13.3
+EOF_DEV
+  git -C "$repo" add env/enc/dev.env.enc
+  git -C "$repo" commit -qm default-scan
+  chmod 000 "$repo/env/enc/dev.env.enc"
+
+  run ores-sops-fleet-audit "$repo"
+  [ "$status" -eq 0 ]
+  header="$(printf '%s\n' "$output" | head -n1)"
+  [ "$header" = $'repository\tstatus\ttracked_plaintext\tunexpected_env_enc\ttracked_symlinks\tsops_rules\tignore_contract\tciphertext_attributes' ]
+  [[ "$output" != *"sendgrid_envs"* ]]
+  [[ "$output" != *"twilio_envs"* ]]
+  [[ "$output" != *"must-not-print"* ]]
+  [[ "$output" != *"SENDGRID_API_KEY"* ]]
+}
+
+@test "provider inventory reports none when only ciphertext values mention the provider" {
+  repo="$ROOT/value-only"
+  init_repo "$repo"
+  write_adopted_policy "$repo"
+  mkdir -p "$repo/env/enc"
+  cat >"$repo/env/enc/dev.env.enc" <<'EOF_DEV'
+UNRELATED_TOKEN=ENC[AES256_GCM,data:SENDGRID_API_KEY,iv:a,tag:b,type:str]
+sops_version=3.13.3
+EOF_DEV
+  git -C "$repo" add env/enc/dev.env.enc
+  git -C "$repo" commit -qm value-only
+  chmod 000 "$repo/env/enc/dev.env.enc"
+
+  run ores-sops-fleet-audit --provider-inventory "$repo"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *$'value-only\tadopted\t0\t0\t0\texact\tok\tok\t0\tnone\tnone'* ]]
+  [[ "$output" != *"SENDGRID_API_KEY"* ]]
+}
+
+@test "provider inventory ignores untracked env/enc blobs" {
+  repo="$ROOT/untracked-enc"
+  init_repo "$repo"
+  write_adopted_policy "$repo"
+  mkdir -p "$repo/env/enc"
+  cat >"$repo/env/enc/dev.env.enc" <<'EOF_DEV'
+SENDGRID_API_KEY=ENC[AES256_GCM,data:untracked-marker,iv:a,tag:b,type:str]
+sops_version=3.13.3
+EOF_DEV
+
+  run ores-sops-fleet-audit --provider-inventory "$repo"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *$'untracked-enc\tadopted\t0\t0\t0\texact\tok\tok\t0\tnone\tnone'* ]]
+  [[ "$output" != *"untracked-marker"* ]]
+}
+
+@test "provider inventory reports none none for adopted repos without provider keys" {
+  repo="$ROOT/no-providers"
+  init_repo "$repo"
+  write_adopted_policy "$repo"
+
+  run ores-sops-fleet-audit --provider-inventory "$repo"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *$'no-providers\tadopted\t0\t0\t0\texact\tok\tok\t0\tnone\tnone'* ]]
+}
+
+@test "unknown fleet-audit option fails closed without scanning" {
+  run ores-sops-fleet-audit --decrypt-please "$ROOT"
+  [ "$status" -eq 64 ]
+  [[ "$output" == *"unknown option"* ]]
+}
+
+@test "consumer bypass counts unguarded mkdir without printing recipe bodies" {
+  repo="$ROOT/bypass"
+  init_repo "$repo"
+  write_adopted_policy "$repo"
+  cat >"$repo/justfile" <<'EOF_JUST'
+use name:
+    mkdir -p env/dec
+    chmod 700 env/dec
+    ores-sops use {{ name }}
+EOF_JUST
+  git -C "$repo" add justfile
+  git -C "$repo" commit -qm bypass
+
+  run ores-sops-fleet-audit --consumer-bypass "$repo"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *$'bypass\tadopted\t0\t0\t0\texact\tok\tok\t2\tmissing'* ]]
+  [[ "$output" != *"ores-sops use"* ]]
+}
+
+@test "consumer bypass counts env.just variable mkdir without printing the recipe" {
+  repo="$ROOT/just-var"
+  init_repo "$repo"
+  write_adopted_policy "$repo"
+  mkdir -p "$repo/.just"
+  cat >"$repo/.just/env.just" <<'EOF_JUST'
+_env-dec:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    path="{{ _dec }}"
+    mkdir -p "$path"
+    chmod 700 "$path"
+EOF_JUST
+  git -C "$repo" add .just/env.just
+  git -C "$repo" commit -qm just-var
+
+  run ores-sops-fleet-audit --consumer-bypass "$repo"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *$'just-var\tadopted\t0\t0\t0\texact\tok\tok\t2\tmissing'* ]]
+  [[ "$output" != *'_env-dec'* ]]
+  [[ "$output" != *'mkdir -p "$path"'* ]]
+}
+
+@test "consumer bypass counts install -d env/dec without printing the recipe" {
+  repo="$ROOT/install-d"
+  init_repo "$repo"
+  write_adopted_policy "$repo"
+  cat >"$repo/justfile" <<'EOF_JUST'
+decrypt:
+    install -d -m 700 env/dec
+    sops --decrypt env/enc/dev.env.enc
+EOF_JUST
+  git -C "$repo" add justfile
+  git -C "$repo" commit -qm install-d
+
+  run ores-sops-fleet-audit --consumer-bypass "$repo"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *$'install-d\tadopted\t0\t0\t0\texact\tok\tok\t1\tmissing'* ]]
+  [[ "$output" != *"sops --decrypt"* ]]
+}
+
+@test "consumer bypass ignores policy scripts that mention mkdir as a forbidden string" {
+  repo="$ROOT/policy-mention"
+  init_repo "$repo"
+  write_adopted_policy "$repo"
+  mkdir -p "$repo/scripts"
+  cat >"$repo/scripts/check-env-policy.sh" <<'EOF_SH'
+#!/usr/bin/env bash
+python3 - <<'PY'
+text = open("justfile").read()
+if "mkdir -p env/dec" in text:
+    raise SystemExit("forbidden")
+PY
+EOF_SH
+  git -C "$repo" add scripts/check-env-policy.sh
+  git -C "$repo" commit -qm policy-mention
+
+  run ores-sops-fleet-audit --consumer-bypass "$repo"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *$'policy-mention\tadopted\t0\t0\t0\texact\tok\tok\t0\tmissing'* ]]
+}
+
+@test "consumer bypass reports ok dockerignore without unguarded mkdir" {
+  repo="$ROOT/guarded"
+  init_repo "$repo"
+  write_adopted_policy "$repo"
+  cat >"$repo/justfile" <<'EOF_JUST'
+use name:
+    ores-sops ensure-dec
+    ores-sops use {{ name }}
+EOF_JUST
+  cat >"$repo/.dockerignore" <<'EOF_DOCKER'
+.env
+env/dec
+env/enc
+EOF_DOCKER
+  git -C "$repo" add justfile .dockerignore
+  git -C "$repo" commit -qm guarded
+
+  run ores-sops-fleet-audit --consumer-bypass "$repo"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *$'guarded\tadopted\t0\t0\t0\texact\tok\tok\t0\tok'* ]]
+}
+
+@test "provider inventory calls out tracked env dec files" {
+  repo="$ROOT/tracked-dec"
+  init_repo "$repo"
+  write_adopted_policy "$repo"
+  mkdir -p "$repo/env/dec"
+  printf 'SECRET_VALUE=must-not-print\n' >"$repo/env/dec/dev.env"
+  git -C "$repo" add -f env/dec/dev.env
+  git -C "$repo" commit -qm tracked-dec
+  chmod 000 "$repo/env/dec/dev.env"
+
+  run ores-sops-fleet-audit --provider-inventory "$repo"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *$'tracked-dec\tconflicting\t1\t0\t0\texact\tok\tok\t1\tnone\tnone'* ]]
+  [[ "$output" != *"SECRET_VALUE"* ]]
+  [[ "$output" != *"must-not-print"* ]]
+
+  run ores-sops-fleet-audit --strict --provider-inventory "$repo"
+  [ "$status" -eq 2 ]
+}

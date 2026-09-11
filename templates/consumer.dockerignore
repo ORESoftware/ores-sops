@@ -1,0 +1,20 @@
+# Canonical ores-sops consumer exclusions.
+# Copy these exact rules into the repository's root .dockerignore.
+
+# Plaintext dotenv at every depth.
+.env
+.env.*
+**/*.env
+**/*.env.*
+
+# Managed decrypted and encrypted environment trees.
+env/dec
+env/dec/**
+env/enc
+env/enc/**
+
+# Common private-key and cloud credential artifacts.
+**/*.pem
+**/*.key
+**/*.p8
+**/*service-account*.json

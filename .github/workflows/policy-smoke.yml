@@ -22,13 +22,38 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Shell syntax
-        run: bash -n ./ores-sops
+      - name: Set up Node for canonical flags2env
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
 
-      - name: Clean-repository policy smoke
+      - name: Install canonical flags-2-env from pinned GitHub source
         shell: bash
         run: |
           set -euo pipefail
+          npm install --no-save --ignore-scripts=false \
+            https://github.com/flags-2-env/flags-2-env/archive/8892365548557e437d81a0d44d650fb9abff6c44.tar.gz
+          printf '%s\n' "$GITHUB_WORKSPACE/node_modules/.bin" >> "$GITHUB_PATH"
+          "$GITHUB_WORKSPACE/node_modules/.bin/flags2env" audit ./.cli-flags.toml >/dev/null
+
+      - name: Shell syntax
+        run: |
+          bash -n ./ores-sops
+          bash -n ./scripts/access-audit.sh
+          bash -n ./scripts/fleet-audit.sh
+
+      - name: Legacy dev prod policy smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          policy_case() { printf 'policy-case: %s\n' "$1"; }
+          assert_contains() {
+            local label="$1" pattern="$2" file="$3"
+            if ! grep -q -- "$pattern" "$file"; then
+              printf 'policy assertion failed: %s\n' "$label" >&2
+              return 1
+            fi
+          }
           work="$(mktemp -d)"
           home="$(mktemp -d)"
           trap 'rm -rf "$work" "$home"' EXIT
@@ -39,18 +64,22 @@ jobs:
 
           (
             cd "$work"
+            policy_case legacy-init
             HOME="$home" "$GITHUB_WORKSPACE/ores-sops" init
 
+            policy_case legacy-ignore-contract
             git check-ignore --no-index -q .env
             git check-ignore --no-index -q root.env
             git check-ignore --no-index -q root.env.local
             git check-ignore --no-index -q nested/child.env
             git check-ignore --no-index -q nested/child.env.production
             git check-ignore --no-index -q env/dec/dev.env
+            git check-ignore --no-index -q env/dec/stage.env
             git check-ignore --no-index -q env/dec/prod.env
 
             ! git check-ignore --no-index -q env/enc/dev.env.enc
             ! git check-ignore --no-index -q env/enc/prod.env.enc
+            git check-ignore --no-index -q env/enc/stage.env.enc
 
             grep -Fxq '*.env' .gitignore
             grep -Fxq '*/*.env' .gitignore
@@ -59,17 +88,111 @@ jobs:
             grep -Fxq '/env/enc/*' .gitignore
             grep -Fxq '!/env/enc/dev.env.enc' .gitignore
             grep -Fxq '!/env/enc/prod.env.enc' .gitignore
+            ! grep -Fq 'path_regex: ^env/enc/stage\.env\.enc$' .sops.yaml
 
             grep -Fq 'path_regex: ^env/enc/dev\.env\.enc$' .sops.yaml
             grep -Fq 'path_regex: ^env/enc/prod\.env\.enc$' .sops.yaml
             grep -Fq '/env/enc/*.env.enc text eol=lf' .gitattributes
             test "$(stat -c '%a' env/dec)" = 700
 
-            if "$GITHUB_WORKSPACE/ores-sops" use app >/tmp/ores-sops-app.out 2>&1; then
+            policy_case legacy-verify
+            HOME="$home" "$GITHUB_WORKSPACE/ores-sops" verify
+
+            policy_case legacy-access-audit
+            # Legacy init remains usable for bootstrap, but intentionally is not
+            # accepted as a least-privilege production recipient matrix.
+            if bash "$GITHUB_WORKSPACE/scripts/access-audit.sh" check --min-recipients 1 --policy-only \
+              >/tmp/ores-sops-legacy-access.out 2>&1; then
+              echo 'expected identical bootstrap recipients to fail the access audit' >&2
+              exit 1
+            fi
+            assert_contains legacy-access-diagnostic 'no environment-exclusive recipient' /tmp/ores-sops-legacy-access.out
+
+            policy_case unconfigured-stage
+            if HOME="$home" "$GITHUB_WORKSPACE/ores-sops" use stage >/tmp/ores-sops-stage-disabled.out 2>&1; then
+              echo 'expected unconfigured stage to fail' >&2
+              exit 1
+            fi
+            assert_contains unconfigured-stage-diagnostic 'stage is not configured' /tmp/ores-sops-stage-disabled.out
+
+            policy_case invalid-profile
+            if HOME="$home" "$GITHUB_WORKSPACE/ores-sops" use app >/tmp/ores-sops-app.out 2>&1; then
               echo 'expected unsupported environment to fail' >&2
               exit 1
             fi
-            grep -q "unsupported environment 'app'" /tmp/ores-sops-app.out
+            assert_contains invalid-profile-event '"event":"argv_admission_rejected"' /tmp/ores-sops-app.out
+            if grep -Fq 'app' /tmp/ores-sops-app.out; then
+              echo 'invalid profile operand leaked past admission redaction' >&2
+              exit 1
+            fi
+          )
+
+      - name: Scoped dev stage prod policy smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          policy_case() { printf 'policy-case: %s\n' "$1"; }
+          assert_contains() {
+            local label="$1" pattern="$2" file="$3"
+            if ! grep -q -- "$pattern" "$file"; then
+              printf 'policy assertion failed: %s\n' "$label" >&2
+              return 1
+            fi
+          }
+          work="$(mktemp -d)"
+          home="$(mktemp -d)"
+          trap 'rm -rf "$work" "$home"' EXIT
+
+          local_recipient="age1$(printf 'd%.0s' {1..58})"
+          stage_recipient="age1$(printf 's%.0s' {1..58})"
+          prod_recipient="age1$(printf 'p%.0s' {1..58})"
+          recovery_recipient="age1$(printf 'r%.0s' {1..58})"
+
+          git -C "$work" init -q
+          mkdir -p "$home/.config/sops/age"
+          printf '# public key: %s\n' "$local_recipient" > "$home/.config/sops/age/keys.txt"
+
+          (
+            cd "$work"
+            policy_case scoped-init
+            HOME="$home" "$GITHUB_WORKSPACE/ores-sops" init \
+              --with-stage \
+              --stage-recipient "$stage_recipient" \
+              --prod-recipient "$prod_recipient" \
+              --recovery-recipient "$recovery_recipient"
+
+            policy_case scoped-policy-contract
+            grep -Fq 'path_regex: ^env/enc/dev\.env\.enc$' .sops.yaml
+            grep -Fq 'path_regex: ^env/enc/stage\.env\.enc$' .sops.yaml
+            grep -Fq 'path_regex: ^env/enc/prod\.env\.enc$' .sops.yaml
+            test "$(grep -c -- "- $local_recipient" .sops.yaml)" = 1
+            test "$(grep -c -- "- $stage_recipient" .sops.yaml)" = 1
+            test "$(grep -c -- "- $prod_recipient" .sops.yaml)" = 1
+            test "$(grep -c -- "- $recovery_recipient" .sops.yaml)" = 3
+
+            ! git check-ignore --no-index -q env/enc/dev.env.enc
+            ! git check-ignore --no-index -q env/enc/stage.env.enc
+            ! git check-ignore --no-index -q env/enc/prod.env.enc
+            git check-ignore --no-index -q env/dec/stage.env
+
+            policy_case scoped-verify
+            HOME="$home" "$GITHUB_WORKSPACE/ores-sops" verify
+            bash "$GITHUB_WORKSPACE/scripts/access-audit.sh" check \
+              --require-stage \
+              --require-stage-exclusive \
+              --require-prod-exclusive \
+              --policy-only
+
+            policy_case invalid-stage-alias
+            if HOME="$home" "$GITHUB_WORKSPACE/ores-sops" use staging >/tmp/ores-sops-staging.out 2>&1; then
+              echo 'expected staging alias to fail' >&2
+              exit 1
+            fi
+            assert_contains invalid-stage-alias-event '"event":"argv_admission_rejected"' /tmp/ores-sops-staging.out
+            if grep -Fq 'staging' /tmp/ores-sops-staging.out; then
+              echo 'invalid profile alias leaked past admission redaction' >&2
+              exit 1
+            fi
           )
 
   full-nix:
