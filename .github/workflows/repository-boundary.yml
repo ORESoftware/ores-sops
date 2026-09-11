@@ -6,6 +6,7 @@ on:
       - justfile
       - .gitignore
       - scripts/check-repository-boundary.sh
+      - scripts/oresc-audit.sh
       - tests/test-repository-boundary.sh
       - .github/workflows/repository-boundary.yml
       - 'result*'
@@ -15,6 +16,7 @@ on:
       - justfile
       - .gitignore
       - scripts/check-repository-boundary.sh
+      - scripts/oresc-audit.sh
       - tests/test-repository-boundary.sh
       - .github/workflows/repository-boundary.yml
       - 'result*'
@@ -47,6 +49,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          bash -n scripts/oresc-audit.sh
           bash scripts/check-repository-boundary.sh
           bash tests/test-repository-boundary.sh
 
@@ -62,4 +65,5 @@ jobs:
           nix develop --command just --list >/dev/null
           nix develop --command shellcheck --shell=bash \
             scripts/check-repository-boundary.sh \
+            scripts/oresc-audit.sh \
             tests/test-repository-boundary.sh
