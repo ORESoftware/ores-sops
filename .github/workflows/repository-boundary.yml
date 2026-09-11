@@ -7,6 +7,7 @@ on:
       - .gitignore
       - scripts/check-repository-boundary.sh
       - scripts/oresc-audit.sh
+      - tests/test-oresc-audit.sh
       - tests/test-repository-boundary.sh
       - .github/workflows/repository-boundary.yml
       - 'result*'
@@ -17,6 +18,7 @@ on:
       - .gitignore
       - scripts/check-repository-boundary.sh
       - scripts/oresc-audit.sh
+      - tests/test-oresc-audit.sh
       - tests/test-repository-boundary.sh
       - .github/workflows/repository-boundary.yml
       - 'result*'
@@ -50,7 +52,9 @@ jobs:
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           bash -n scripts/oresc-audit.sh
+          bash -n tests/test-oresc-audit.sh
           bash scripts/check-repository-boundary.sh
+          bash tests/test-oresc-audit.sh
           bash tests/test-repository-boundary.sh
 
       - name: Install pinned Nix environment
@@ -66,4 +70,5 @@ jobs:
           nix develop --command shellcheck --shell=bash \
             scripts/check-repository-boundary.sh \
             scripts/oresc-audit.sh \
+            tests/test-oresc-audit.sh \
             tests/test-repository-boundary.sh
