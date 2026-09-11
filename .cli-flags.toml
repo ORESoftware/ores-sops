@@ -2,6 +2,7 @@
 # flags2env audit; do not add a second argv parser or implicit dotenv source.
 
 [env]
+dotenv = false
 files = []
 
 [parse]
