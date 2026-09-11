@@ -59,12 +59,12 @@ if grep -Eq '(mkdir|install|chmod)[^#]*env/dec' "$tmp/justfile"; then
 fi
 
 required_recipes=(
-  default audit test-contract ensure-dec list-encrypted check-ignore
+  default audit ores-lint test-contract ensure-dec list-encrypted check-ignore
   use-dev use-prod use-force-dev use-force-prod
   encrypt-dev encrypt-prod edit-dev edit-prod diff-dev diff-prod
   status refresh verify lock install-hooks check
 )
-approved_recipes=' default audit test-contract ensure-dec list-encrypted check-ignore use-dev use-prod use-force-dev use-force-prod encrypt-dev encrypt-prod edit-dev edit-prod diff-dev diff-prod status refresh verify lock install-hooks check '
+approved_recipes=' default audit ores-lint test-contract ensure-dec list-encrypted check-ignore use-dev use-prod use-force-dev use-force-prod encrypt-dev encrypt-prod edit-dev edit-prod diff-dev diff-prod status refresh verify lock install-hooks check '
 
 sed -nE 's/^([A-Za-z0-9_-]+):$/\1/p' "$tmp/justfile" >"$tmp/recipes"
 for recipe in "${required_recipes[@]}"; do
@@ -90,6 +90,7 @@ while IFS= read -r raw; do
   case "$line" in
     "@just --list" | \
     "python3 tools/audit_env_contract.py" | \
+    "bash scripts/oresc-audit.sh" | \
     "python3 -m unittest discover -s test -p 'test_audit_env_contract.py' -v" | \
     "@if [[ -d env/enc ]]; then find env/enc -type f -name '*.env.enc' -print | LC_ALL=C sort; fi" | \
     "git check-ignore --quiet .env" | \
