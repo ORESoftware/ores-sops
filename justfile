@@ -7,6 +7,11 @@ default:
 audit:
     python3 tools/audit_env_contract.py
 
+# Apply fleet-standard ores-cli repository/source/config linting without reading
+# secret values or replacing ores-sops' secret-aware encrypted-env checks.
+ores-lint:
+    bash scripts/oresc-audit.sh
+
 # Exercise the adversarial encrypted-environment contract suite.
 test-contract:
     python3 -m unittest discover -s test -p 'test_audit_env_contract.py' -v
