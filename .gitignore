@@ -3,6 +3,11 @@ result-*
 .direnv/
 .DS_Store
 
+# >>> ores fleet hygiene — managed block, edits below are overwritten >>>
+tmp/temp/
+tmp/worktrees/
+# <<< ores fleet hygiene <<<
+
 # SOPS ciphertext is reviewable under env/enc/. Plaintext/decrypted material is
 # runtime-only and must never enter the Git index.
 /env/dec/
@@ -12,12 +17,10 @@ result-*
 !/.env.example
 !/.env.sample
 !/.env.template
-
 # Age private identities are never repository material.
 /age.key
 /age.txt
 /keys.txt
-
 # Repository-local scratch space; these ignores do not authorize worktrees.
 # Only with explicit human authorization, use /tmp/worktrees/ for temporary Git
 # worktrees. Inspect WIP before authorized removal via `git worktree remove`;
