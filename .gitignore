@@ -27,3 +27,6 @@ tmp/worktrees/
 # never use raw filesystem deletion or force-removal to discard another's work.
 /tmp/
 /temp/
+
+# typespec-json-schema-validator comparison evidence (generated; never an authority)
+.typespec-json-schema-validator/
