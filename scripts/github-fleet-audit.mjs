@@ -121,6 +121,7 @@ function isSafeExample(path) {
 }
 
 function looksPlaintextEnv(path) {
+  if (path === 'env/enc' || path.startsWith('env/enc/')) return false;
   if (isSafeExample(path)) return false;
   if (path === 'env/dec' || path.startsWith('env/dec/')) return true;
   const base = path.split('/').at(-1);
