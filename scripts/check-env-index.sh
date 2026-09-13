@@ -38,6 +38,21 @@ ciphertext_shape() {
   '
 }
 
+# Stage is an optional exact environment in the v0.4 contract. Derive its
+# admission from the candidate Git tree, never from an unstaged working-tree
+# replacement of .sops.yaml. This keeps the check resistant to staged/unstaged
+# policy mismatches in exactly the same way as ciphertext validation below.
+stage_enabled=0
+if git cat-file -e "$tree:.sops.yaml" 2>/dev/null; then
+  policy_entry=$(git ls-tree "$tree" -- .sops.yaml)
+  read -r policy_mode policy_kind policy_oid policy_path <<<"$policy_entry"
+  [ "$policy_kind:$policy_mode" = blob:100644 ] || fail '.sops.yaml must be a non-executable regular blob'
+  [ "$policy_path" = .sops.yaml ] || fail 'candidate tree returned an unexpected .sops.yaml path'
+  if git cat-file blob "$policy_oid" | sed -e 's/^[[:space:]]*//' | grep -Fqx -- '- path_regex: ^env/enc/stage\.env\.enc$'; then
+    stage_enabled=1
+  fi
+fi
+
 while IFS= read -r -d '' entry; do
   metadata=${entry%%$'\t'*}
   path=${entry#*$'\t'}
@@ -50,10 +65,15 @@ while IFS= read -r -d '' entry; do
       [ "$kind:$mode" = blob:100644 ] || fail "ciphertext must be a non-executable regular blob: $shown"
       git cat-file blob "$oid" | ciphertext_shape || fail "invalid SOPS dotenv structure in staged blob: $shown"
       ;;
+    env/enc/stage.env.enc)
+      [ "$stage_enabled" -eq 1 ] || fail "stage ciphertext requires the exact staged stage creation rule: $shown"
+      [ "$kind:$mode" = blob:100644 ] || fail "ciphertext must be a non-executable regular blob: $shown"
+      git cat-file blob "$oid" | ciphertext_shape || fail "invalid SOPS dotenv structure in staged blob: $shown"
+      ;;
     env/enc|env/enc/*)
       fail "unexpected tracked ciphertext path: $shown" ;;
-    .dockerignore|.gitignore|.gitattributes|.sops.yaml|justfile|.env.example|*/.env.example)
-      case "$kind:$mode" in blob:100644|blob:100755) ;; *) fail "policy/example must be a regular blob: $shown" ;; esac
+    .dockerignore|.gitignore|.gitattributes|.sops.yaml|justfile|.env.example|*/.env.example|.env.sample|*/.env.sample|.env.template|*/.env.template)
+      [ "$kind:$mode" = blob:100644 ] || fail "policy/example must be a non-executable regular blob: $shown"
       ;;
     .env|*/.env|*.env|.env.*|*/.env.*|*.env.*)
       fail "tracked plaintext dotenv path: $shown" ;;
