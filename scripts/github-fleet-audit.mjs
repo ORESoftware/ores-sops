@@ -138,6 +138,17 @@ function hasLine(text, line) {
   return (text || '').split(/\r?\n/).some((candidate) => candidate.trim() === line);
 }
 
+function isConflictIssue(issue) {
+  return issue.startsWith('tracked-plaintext:') ||
+    issue.startsWith('unexpected-ciphertext:') ||
+    issue.startsWith('managed-symlink:') ||
+    issue.startsWith('ciphertext-mode:') ||
+    issue.startsWith('policy-mode:') ||
+    issue.startsWith('policy:noncanonical-rule:') ||
+    issue === 'policy:key_groups-requires-threshold-review' ||
+    issue === 'stage:ciphertext-without-exact-rule';
+}
+
 async function auditRepo(repo) {
   const tree = await request(`/repos/${repo.full_name}/git/trees/${encodeURIComponent(repo.default_branch)}?recursive=1`);
   if (tree.truncated) {
@@ -150,17 +161,27 @@ async function auditRepo(repo) {
   const encPaths = paths.filter((path) => path.startsWith('env/enc/'));
   const adoptedSignal = Boolean(policyEntry) || encPaths.length > 0;
 
+  // Plaintext is unsafe even when a repository has not adopted ores-sops yet.
+  // Do not let the adoption fast path hide tracked .env / env/dec material.
+  const plaintextIssues = paths
+    .filter((path) => looksPlaintextEnv(path))
+    .map((path) => `tracked-plaintext:${path}`);
+
   if (!adoptedSignal) {
-    return { repo: repo.full_name, org: repo.owner.login, status: 'not-adopted', issues: [] };
+    return {
+      repo: repo.full_name,
+      org: repo.owner.login,
+      status: plaintextIssues.length > 0 ? 'conflicting' : 'not-adopted',
+      issues: plaintextIssues,
+    };
   }
 
-  const issues = [];
+  const issues = [...plaintextIssues];
   const canonical = new Set(['env/enc/dev.env.enc', 'env/enc/prod.env.enc', 'env/enc/stage.env.enc']);
 
   for (const path of paths) {
     const entry = entries.get(path);
     if (isManagedPath(path) && entry?.mode === '120000') issues.push(`managed-symlink:${path}`);
-    if (looksPlaintextEnv(path)) issues.push(`tracked-plaintext:${path}`);
   }
   for (const path of encPaths) {
     if (!canonical.has(path)) issues.push(`unexpected-ciphertext:${path}`);
@@ -170,9 +191,15 @@ async function auditRepo(repo) {
 
   if (!policyEntry) {
     issues.push('missing:.sops.yaml');
-    return { repo: repo.full_name, org: repo.owner.login, status: 'partial', issues };
+    return { repo: repo.full_name, org: repo.owner.login, status: issues.some(isConflictIssue) ? 'conflicting' : 'partial', issues };
   }
-  if (policyEntry.type !== 'blob' || policyEntry.mode !== '100644') issues.push(`policy-mode:.sops.yaml:${policyEntry.mode || policyEntry.type}`);
+  if (policyEntry.type !== 'blob' || policyEntry.mode !== '100644') {
+    issues.push(`policy-mode:.sops.yaml:${policyEntry.mode || policyEntry.type}`);
+    return { repo: repo.full_name, org: repo.owner.login, status: 'conflicting', issues };
+  }
+  if (issues.some((issue) => issue.startsWith('managed-symlink:'))) {
+    return { repo: repo.full_name, org: repo.owner.login, status: 'conflicting', issues };
+  }
 
   const [policy, gitignore, gitattributes, dockerignore] = await Promise.all([
     readText(repo, '.sops.yaml'),
@@ -224,18 +251,10 @@ async function auditRepo(repo) {
     }
   }
 
-  const conflicting = issues.some((issue) =>
-    issue.startsWith('tracked-plaintext:') ||
-    issue.startsWith('unexpected-ciphertext:') ||
-    issue.startsWith('managed-symlink:') ||
-    issue.startsWith('policy:noncanonical-rule:') ||
-    issue === 'policy:key_groups-requires-threshold-review' ||
-    issue === 'stage:ciphertext-without-exact-rule'
-  );
   return {
     repo: repo.full_name,
     org: repo.owner.login,
-    status: conflicting ? 'conflicting' : issues.length ? 'partial' : 'adopted',
+    status: issues.some(isConflictIssue) ? 'conflicting' : issues.length ? 'partial' : 'adopted',
     issues,
   };
 }
