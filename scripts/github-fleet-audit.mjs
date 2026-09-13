@@ -204,10 +204,22 @@ async function auditRepo(repo) {
   if (entries.has('Dockerfile')) {
     if (!dockerignore) issues.push('dockerignore:missing');
     else {
-      for (const line of ['env/dec', 'env/enc', '.env', '*.agekey', 'keys.txt']) {
-        if (!(dockerignore || '').split(/\r?\n/).some((candidate) => candidate.trim() === line)) {
-          issues.push(`dockerignore:missing:${line}`);
-        }
+      const requiredDockerRules = [
+        '.env',
+        '.env.*',
+        '**/*.env',
+        '**/*.env.*',
+        'env/dec',
+        'env/dec/**',
+        'env/enc',
+        'env/enc/**',
+        '**/*.pem',
+        '**/*.key',
+        '**/*.p8',
+        '**/*service-account*.json',
+      ];
+      for (const line of requiredDockerRules) {
+        if (!hasLine(dockerignore, line)) issues.push(`dockerignore:missing:${line}`);
       }
     }
   }
