@@ -23,6 +23,10 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Self-test remote GitHub tree classifier
+        shell: bash
+        run: node ./scripts/github-fleet-audit.mjs --self-test
+
       - name: Clone public candidate batches
         shell: bash
         env:
