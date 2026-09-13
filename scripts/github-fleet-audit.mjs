@@ -149,10 +149,13 @@ function isConflictIssue(issue) {
     issue === 'stage:ciphertext-without-exact-rule';
 }
 
-async function auditRepo(repo) {
-  const tree = await request(`/repos/${repo.full_name}/git/trees/${encodeURIComponent(repo.default_branch)}?recursive=1`);
+function repoResult(repo, status, issues) {
+  return { repo: repo.full_name, org: repo.owner.login, status, issues };
+}
+
+function scanTreeStructure(repo, tree) {
   if (tree.truncated) {
-    return { repo: repo.full_name, org: repo.owner.login, status: 'indeterminate', issues: ['recursive-tree-truncated'] };
+    return { early: repoResult(repo, 'indeterminate', ['recursive-tree-truncated']) };
   }
 
   const entries = new Map(tree.tree.map((entry) => [entry.path, entry]));
@@ -169,10 +172,7 @@ async function auditRepo(repo) {
 
   if (!adoptedSignal) {
     return {
-      repo: repo.full_name,
-      org: repo.owner.login,
-      status: plaintextIssues.length > 0 ? 'conflicting' : 'not-adopted',
-      issues: plaintextIssues,
+      early: repoResult(repo, plaintextIssues.length > 0 ? 'conflicting' : 'not-adopted', plaintextIssues),
     };
   }
 
@@ -191,15 +191,63 @@ async function auditRepo(repo) {
 
   if (!policyEntry) {
     issues.push('missing:.sops.yaml');
-    return { repo: repo.full_name, org: repo.owner.login, status: issues.some(isConflictIssue) ? 'conflicting' : 'partial', issues };
+    return { early: repoResult(repo, issues.some(isConflictIssue) ? 'conflicting' : 'partial', issues) };
   }
   if (policyEntry.type !== 'blob' || policyEntry.mode !== '100644') {
     issues.push(`policy-mode:.sops.yaml:${policyEntry.mode || policyEntry.type}`);
-    return { repo: repo.full_name, org: repo.owner.login, status: 'conflicting', issues };
+    return { early: repoResult(repo, 'conflicting', issues) };
   }
   if (issues.some((issue) => issue.startsWith('managed-symlink:'))) {
-    return { repo: repo.full_name, org: repo.owner.login, status: 'conflicting', issues };
+    return { early: repoResult(repo, 'conflicting', issues) };
   }
+
+  return { early: null, entries, issues };
+}
+
+function runSelfTest() {
+  const repo = { full_name: 'example/repo', owner: { login: 'example' } };
+  const tree = (...entries) => ({ truncated: false, tree: entries });
+  const blob = (path, mode = '100644') => ({ path, type: 'blob', mode });
+  const symlink = (path) => ({ path, type: 'blob', mode: '120000' });
+  const expect = (condition, message) => {
+    if (!condition) throw new Error(`self-test failed: ${message}`);
+  };
+
+  let result = scanTreeStructure(repo, tree(blob('README.md')));
+  expect(result.early?.status === 'not-adopted', 'clean non-adopted repo');
+
+  result = scanTreeStructure(repo, tree(blob('README.md'), blob('.env')));
+  expect(result.early?.status === 'conflicting', 'tracked root .env must conflict before adoption');
+  expect(result.early.issues.includes('tracked-plaintext:.env'), 'root .env finding retained');
+
+  result = scanTreeStructure(repo, tree(blob('env/dec/dev.env')));
+  expect(result.early?.status === 'conflicting', 'tracked env/dec must conflict before adoption');
+
+  result = scanTreeStructure(repo, tree(blob('env/enc/dev.env.enc')));
+  expect(result.early?.status === 'partial', 'ciphertext without policy is partial');
+
+  result = scanTreeStructure(repo, tree(blob('.sops.yaml'), blob('env/enc/dev.env.enc', '100755')));
+  expect(result.early?.status === undefined, 'executable ciphertext remains inspectable until final classification');
+  expect(result.issues.some((issue) => issue.startsWith('ciphertext-mode:')), 'executable ciphertext mode is recorded');
+  expect(result.issues.some(isConflictIssue), 'executable ciphertext is conflicting');
+
+  result = scanTreeStructure(repo, tree(symlink('.sops.yaml'), blob('env/enc/dev.env.enc')));
+  expect(result.early?.status === 'conflicting', 'symlinked policy fails before contents read');
+
+  result = scanTreeStructure(repo, tree(blob('.sops.yaml', '100755'), blob('env/enc/dev.env.enc')));
+  expect(result.early?.status === 'conflicting', 'executable policy is conflicting');
+
+  result = scanTreeStructure(repo, { truncated: true, tree: [] });
+  expect(result.early?.status === 'indeterminate', 'truncated trees are indeterminate');
+
+  console.log('github fleet tree-structure self-test passed');
+}
+
+async function auditRepo(repo) {
+  const tree = await request(`/repos/${repo.full_name}/git/trees/${encodeURIComponent(repo.default_branch)}?recursive=1`);
+  const structure = scanTreeStructure(repo, tree);
+  if (structure.early) return structure.early;
+  const { entries, issues } = structure;
 
   const [policy, gitignore, gitattributes, dockerignore] = await Promise.all([
     readText(repo, '.sops.yaml'),
@@ -298,4 +346,12 @@ async function main() {
   if (options.strict && (counts.partial > 0 || counts.conflicting > 0 || counts.indeterminate > 0)) process.exit(1);
 }
 
-main().catch((error) => fail(error.stack || error.message));
+if (process.argv.slice(2).includes('--self-test')) {
+  try {
+    runSelfTest();
+  } catch (error) {
+    fail(error.stack || error.message);
+  }
+} else {
+  main().catch((error) => fail(error.stack || error.message));
+}
