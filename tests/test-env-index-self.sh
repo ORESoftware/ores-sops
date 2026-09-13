@@ -42,15 +42,19 @@ chmod 644 .env.sample
 git add .env.sample
 bash scripts/check-env-index.sh >/dev/null
 
-# Stage is optional, but when present it is admitted only from the exact staged
-# .sops.yaml rule. The working tree is not consulted for this decision.
-mkdir -p env/enc
-cat > .sops.yaml <<'EOF_POLICY'
+write_stage_policy() {
+  cat > .sops.yaml <<'EOF_POLICY'
 creation_rules:
   - path_regex: ^env/enc/dev\.env\.enc$
   - path_regex: ^env/enc/stage\.env\.enc$
   - path_regex: ^env/enc/prod\.env\.enc$
 EOF_POLICY
+}
+
+# Stage is optional, but when present it is admitted only from the exact staged
+# .sops.yaml rule. The working tree is not consulted for this decision.
+mkdir -p env/enc
+write_stage_policy
 cat > env/enc/stage.env.enc <<'EOF_CIPHERTEXT'
 EXAMPLE=ENC[AES256_GCM,data:AA==,iv:AA==,tag:AA==,type:str]
 sops_mac=ENC[AES256_GCM,data:AA==,iv:AA==,tag:AA==,type:str]
@@ -59,7 +63,7 @@ git add .sops.yaml env/enc/stage.env.enc
 bash scripts/check-env-index.sh >/dev/null
 
 # An unstaged policy replacement must not change the candidate-index decision.
-grep -v 'stage\\.env' .sops.yaml > .sops.yaml.worktree
+grep -v 'stage' .sops.yaml > .sops.yaml.worktree
 mv .sops.yaml.worktree .sops.yaml
 bash scripts/check-env-index.sh >/dev/null
 
@@ -69,7 +73,8 @@ if bash scripts/check-env-index.sh > "$tmp/output" 2>&1; then
   echo 'expected stage ciphertext without staged stage rule rejection' >&2; exit 1
 fi
 
-git checkout -q -- .sops.yaml
+# Restore a valid staged stage policy for the remaining independent regressions.
+write_stage_policy
 git add .sops.yaml
 bash scripts/check-env-index.sh >/dev/null
 
