@@ -3,6 +3,7 @@
 setup() {
   export TESTDIR="$BATS_TEST_TMPDIR/repo"
   export SOPS_AGE_KEY_FILE="$BATS_TEST_TMPDIR/age.txt"
+  export ORES_SOPS_TELEMETRY=0
   age-keygen -o "$SOPS_AGE_KEY_FILE" 2>/dev/null
   RECIPIENT="$(grep -o 'age1[a-z0-9]\{58\}' "$SOPS_AGE_KEY_FILE" | head -1)"
 
@@ -60,8 +61,8 @@ EOF_IGNORE
 @test "exec preserves downstream argv without shell injection" {
   payload="a'b;\$(touch $TESTDIR/should-not-exist)"
   run ores-sops exec --environment=dev -- sh -c 'test "$1" = "$EXPECTED"' _ "$payload"
-  # EXPECTED is ambient, not decrypted; this also proves ambient env is retained.
-  # Re-run with the expected value set only for the ores-sops process.
+  # EXPECTED is ambient, not decrypted; this first run should fail while still
+  # proving the payload was passed as data rather than evaluated by the shell.
   [ "$status" -ne 0 ]
   [ ! -e "$TESTDIR/should-not-exist" ]
 
