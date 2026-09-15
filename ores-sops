@@ -89,10 +89,13 @@ run_exec() {
     command_string="${command_string:+$command_string }$quoted"
   done
 
-  # SOPS decrypts directly into the child environment. No env/dec file, root
-  # .env symlink, shell sourcing, step output, or plaintext command argument is
-  # created by this path. The command string contains only caller-supplied argv.
-  (cd "$root" && sops exec-env --input-type dotenv "$src" "$command_string")
+  # `input-type` is a SOPS global flag and therefore must precede the exec-env
+  # subcommand. SOPS then parses the tracked .env.enc ciphertext as dotenv and
+  # injects decrypted values directly into the child environment. No env/dec
+  # file, root .env symlink, shell sourcing, step output, or plaintext command
+  # argument is created by this path. The command string contains only
+  # caller-supplied argv.
+  (cd "$root" && sops --input-type dotenv exec-env "$src" "$command_string")
 }
 
 [[ -x "${CORE}" ]] || fail core_missing "internal core executable is missing"
@@ -181,14 +184,17 @@ if ! (
               !["dev", "stage", "prod"].includes(operands[0])
             ) process.exit(2);
           } else if (command === "exec") {
-            if (operands.length < 1 || operands.length > 128) process.exit(2);
+            // The wrapper owns semantic checks for a missing `--` or child
+            // command so diagnostics stay fixed and redacted. This layer only
+            // bounds any downstream argv that flags2env did observe.
+            if (operands.length > 128) process.exit(2);
             let bytes = 0;
             for (const operand of operands) {
               if (operand.length > 4096 || /[\u0000-\u001f\u007f]/u.test(operand)) process.exit(2);
               bytes += Buffer.byteLength(operand, "utf8") + 1;
               if (bytes > 32768) process.exit(2);
             }
-            if (operands[0].length === 0) process.exit(2);
+            if (operands.length > 0 && operands[0].length === 0) process.exit(2);
           } else if (operands.length !== 0) {
             process.exit(2);
           }
