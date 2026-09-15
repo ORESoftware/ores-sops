@@ -45,12 +45,20 @@ EOF_IGNORE
   ores-sops lock >/dev/null
 }
 
+assert_status_is() {
+  local expected="$1"
+  if [ "$status" -ne "$expected" ]; then
+    printf 'exec-env synthetic failure: expected=%s actual=%s output=%q\n' "$expected" "$status" "$output" >&3
+  fi
+  [ "$status" -eq "$expected" ]
+}
+
 @test "exec exposes decrypted values without materializing managed plaintext" {
   [ ! -e .env ]
   [ ! -e env/dec/dev.env ]
 
   run ores-sops exec --env dev -- sh -c 'test "$EXEC_FIXTURE" = synthetic-exec-value && printf admitted'
-  [ "$status" -eq 0 ]
+  assert_status_is 0
   [ "$output" = "admitted" ]
 
   [ ! -e .env ]
@@ -67,13 +75,13 @@ EOF_IGNORE
   [ ! -e "$TESTDIR/should-not-exist" ]
 
   run env EXPECTED="$payload" ores-sops exec --environment=dev -- sh -c 'test "$1" = "$EXPECTED"' _ "$payload"
-  [ "$status" -eq 0 ]
+  assert_status_is 0
   [ ! -e "$TESTDIR/should-not-exist" ]
 }
 
 @test "exec preserves child exit status" {
   run ores-sops exec --env dev -- sh -c 'exit 37'
-  [ "$status" -eq 37 ]
+  assert_status_is 37
 }
 
 @test "exec requires explicit environment delimiter and command" {
@@ -83,10 +91,16 @@ EOF_IGNORE
 
   run ores-sops exec --env dev
   [ "$status" -ne 0 ]
+  if [[ "$output" != *"bare -- followed by a command"* ]]; then
+    printf 'exec-env synthetic failure: missing-command output=%q\n' "$output" >&3
+  fi
   [[ "$output" == *"bare -- followed by a command"* ]]
 
   run ores-sops exec --env dev --
   [ "$status" -ne 0 ]
+  if [[ "$output" != *"bare -- followed by a command"* ]]; then
+    printf 'exec-env synthetic failure: empty-command output=%q\n' "$output" >&3
+  fi
   [[ "$output" == *"bare -- followed by a command"* ]]
 }
 
