@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://oresoftware.github.io/ores-sops/contracts/portable-config/authored.schema.json",
+  "title": "PortableConfigManifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "keys"],
+  "properties": {
+    "schema": {
+      "const": "ores-sops.portable-config/v1"
+    },
+    "keys": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ConfigKeyPolicy"
+      }
+    }
+  },
+  "$defs": {
+    "DeploymentEnvironment": {
+      "type": "string",
+      "enum": ["dev", "stage", "prod"]
+    },
+    "ExecutionProfile": {
+      "type": "string",
+      "enum": ["local", "gha", "gha-indie-worker", "test"]
+    },
+    "ConfigValueType": {
+      "type": "string",
+      "enum": ["string", "bool", "integer", "double", "json", "url"]
+    },
+    "ConfigSensitivity": {
+      "type": "string",
+      "enum": ["secret", "non_secret"]
+    },
+    "DiagnosticVisibility": {
+      "type": "string",
+      "enum": ["key_name_only", "metadata_allowed"]
+    },
+    "ConfigKeyPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "key",
+        "valueType",
+        "sensitivity",
+        "required",
+        "environments",
+        "profiles",
+        "profileOverride",
+        "diagnosticVisibility"
+      ],
+      "properties": {
+        "key": {
+          "type": "string",
+          "pattern": "^[A-Z_][A-Z0-9_]*$"
+        },
+        "valueType": {
+          "$ref": "#/$defs/ConfigValueType"
+        },
+        "sensitivity": {
+          "$ref": "#/$defs/ConfigSensitivity"
+        },
+        "required": {
+          "type": "boolean"
+        },
+        "environments": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DeploymentEnvironment"
+          }
+        },
+        "profiles": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ExecutionProfile"
+          }
+        },
+        "profileOverride": {
+          "type": "boolean"
+        },
+        "diagnosticVisibility": {
+          "$ref": "#/$defs/DiagnosticVisibility"
+        },
+        "owner": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "deprecated": {
+          "type": "boolean"
+        },
+        "replacementKey": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}
