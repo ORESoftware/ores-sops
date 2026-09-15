@@ -1,45 +1,64 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://oresoftware.github.io/ores-sops/contracts/portable-config/authored.schema.json",
-  "title": "PortableConfigManifest",
-  "type": "object",
-  "additionalProperties": false,
-  "required": ["schema", "keys"],
-  "properties": {
-    "schema": {
-      "const": "ores-sops.portable-config/v1"
-    },
-    "keys": {
-      "type": "array",
-      "items": {
-        "$ref": "#/$defs/ConfigKeyPolicy"
-      }
-    }
-  },
+  "$id": "ores-sops.portable-config.authored.schema.json",
   "$defs": {
     "DeploymentEnvironment": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$id": "DeploymentEnvironment",
       "type": "string",
       "enum": ["dev", "stage", "prod"]
     },
     "ExecutionProfile": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$id": "ExecutionProfile",
       "type": "string",
       "enum": ["local", "gha", "gha-indie-worker", "test"]
     },
     "ConfigValueType": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$id": "ConfigValueType",
       "type": "string",
       "enum": ["string", "bool", "integer", "double", "json", "url"]
     },
     "ConfigSensitivity": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$id": "ConfigSensitivity",
       "type": "string",
       "enum": ["secret", "non_secret"]
     },
     "DiagnosticVisibility": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$id": "DiagnosticVisibility",
       "type": "string",
       "enum": ["key_name_only", "metadata_allowed"]
     },
     "ConfigKeyPolicy": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$id": "ConfigKeyPolicy",
       "type": "object",
-      "additionalProperties": false,
+      "properties": {
+        "key": {
+          "type": "string",
+          "pattern": "^[A-Z_][A-Z0-9_]*$"
+        },
+        "valueType": {"$ref": "ConfigValueType"},
+        "sensitivity": {"$ref": "ConfigSensitivity"},
+        "required": {"type": "boolean"},
+        "environments": {
+          "type": "array",
+          "items": {"$ref": "DeploymentEnvironment"}
+        },
+        "profiles": {
+          "type": "array",
+          "items": {"$ref": "ExecutionProfile"}
+        },
+        "profileOverride": {"type": "boolean"},
+        "diagnosticVisibility": {"$ref": "DiagnosticVisibility"},
+        "owner": {"type": "string"},
+        "provider": {"type": "string"},
+        "deprecated": {"type": "boolean"},
+        "replacementKey": {"type": "string"}
+      },
       "required": [
         "key",
         "valueType",
@@ -50,51 +69,24 @@
         "profileOverride",
         "diagnosticVisibility"
       ],
+      "unevaluatedProperties": false
+    },
+    "PortableConfigManifest": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$id": "PortableConfigManifest",
+      "type": "object",
       "properties": {
-        "key": {
+        "schema": {
           "type": "string",
-          "pattern": "^[A-Z_][A-Z0-9_]*$"
+          "const": "ores-sops.portable-config/v1"
         },
-        "valueType": {
-          "$ref": "#/$defs/ConfigValueType"
-        },
-        "sensitivity": {
-          "$ref": "#/$defs/ConfigSensitivity"
-        },
-        "required": {
-          "type": "boolean"
-        },
-        "environments": {
+        "keys": {
           "type": "array",
-          "items": {
-            "$ref": "#/$defs/DeploymentEnvironment"
-          }
-        },
-        "profiles": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/ExecutionProfile"
-          }
-        },
-        "profileOverride": {
-          "type": "boolean"
-        },
-        "diagnosticVisibility": {
-          "$ref": "#/$defs/DiagnosticVisibility"
-        },
-        "owner": {
-          "type": "string"
-        },
-        "provider": {
-          "type": "string"
-        },
-        "deprecated": {
-          "type": "boolean"
-        },
-        "replacementKey": {
-          "type": "string"
+          "items": {"$ref": "ConfigKeyPolicy"}
         }
-      }
+      },
+      "required": ["schema", "keys"],
+      "unevaluatedProperties": false
     }
   }
 }
