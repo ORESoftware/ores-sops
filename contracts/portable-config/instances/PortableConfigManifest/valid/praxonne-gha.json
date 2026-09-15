@@ -1,0 +1,39 @@
+{
+  "schema": "ores-sops.portable-config/v1",
+  "keys": [
+    {
+      "key": "APP_ID",
+      "valueType": "string",
+      "sensitivity": "secret",
+      "required": true,
+      "environments": ["dev"],
+      "profiles": ["gha", "gha-indie-worker"],
+      "profileOverride": false,
+      "diagnosticVisibility": "key_name_only",
+      "owner": "praxonne",
+      "provider": "github-app"
+    },
+    {
+      "key": "APP_KEY",
+      "valueType": "string",
+      "sensitivity": "secret",
+      "required": true,
+      "environments": ["dev"],
+      "profiles": ["gha", "gha-indie-worker"],
+      "profileOverride": false,
+      "diagnosticVisibility": "key_name_only",
+      "owner": "praxonne",
+      "provider": "github-app"
+    },
+    {
+      "key": "CI_LOG_FORMAT",
+      "valueType": "string",
+      "sensitivity": "non_secret",
+      "required": false,
+      "environments": ["dev", "stage", "prod"],
+      "profiles": ["local", "gha", "gha-indie-worker", "test"],
+      "profileOverride": true,
+      "diagnosticVisibility": "metadata_allowed"
+    }
+  ]
+}

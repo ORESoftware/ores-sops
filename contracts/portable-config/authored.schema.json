@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "ores-sops.portable-config.authored.schema.json",
+  "$defs": {
+    "DeploymentEnvironment": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$id": "DeploymentEnvironment",
+      "type": "string",
+      "enum": ["dev", "stage", "prod"]
+    },
+    "ExecutionProfile": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$id": "ExecutionProfile",
+      "type": "string",
+      "enum": ["local", "gha", "gha-indie-worker", "test"]
+    },
+    "ConfigValueType": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$id": "ConfigValueType",
+      "type": "string",
+      "enum": ["string", "bool", "integer", "double", "json", "url"]
+    },
+    "ConfigSensitivity": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$id": "ConfigSensitivity",
+      "type": "string",
+      "enum": ["secret", "non_secret"]
+    },
+    "DiagnosticVisibility": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$id": "DiagnosticVisibility",
+      "type": "string",
+      "enum": ["key_name_only", "metadata_allowed"]
+    },
+    "ConfigKeyPolicy": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$id": "ConfigKeyPolicy",
+      "type": "object",
+      "properties": {
+        "key": {
+          "type": "string",
+          "pattern": "^[A-Z_][A-Z0-9_]*$"
+        },
+        "valueType": {"$ref": "ConfigValueType"},
+        "sensitivity": {"$ref": "ConfigSensitivity"},
+        "required": {"type": "boolean"},
+        "environments": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"$ref": "DeploymentEnvironment"}
+        },
+        "profiles": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"$ref": "ExecutionProfile"}
+        },
+        "profileOverride": {"type": "boolean"},
+        "diagnosticVisibility": {"$ref": "DiagnosticVisibility"},
+        "owner": {"type": "string", "minLength": 1},
+        "provider": {"type": "string", "minLength": 1},
+        "deprecated": {"type": "boolean"},
+        "replacementKey": {
+          "type": "string",
+          "pattern": "^[A-Z_][A-Z0-9_]*$"
+        }
+      },
+      "required": [
+        "key",
+        "valueType",
+        "sensitivity",
+        "required",
+        "environments",
+        "profiles",
+        "profileOverride",
+        "diagnosticVisibility"
+      ],
+      "unevaluatedProperties": false
+    },
+    "PortableConfigManifest": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$id": "PortableConfigManifest",
+      "type": "object",
+      "properties": {
+        "schema": {
+          "type": "string",
+          "const": "ores-sops.portable-config/v1"
+        },
+        "keys": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "ConfigKeyPolicy"}
+        }
+      },
+      "required": ["schema", "keys"],
+      "unevaluatedProperties": false
+    }
+  }
+}

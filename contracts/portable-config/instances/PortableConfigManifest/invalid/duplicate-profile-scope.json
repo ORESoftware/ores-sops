@@ -1,0 +1,15 @@
+{
+  "schema": "ores-sops.portable-config/v1",
+  "keys": [
+    {
+      "key": "APP_KEY",
+      "valueType": "string",
+      "sensitivity": "secret",
+      "required": true,
+      "environments": ["dev"],
+      "profiles": ["gha", "gha"],
+      "profileOverride": false,
+      "diagnosticVisibility": "key_name_only"
+    }
+  ]
+}

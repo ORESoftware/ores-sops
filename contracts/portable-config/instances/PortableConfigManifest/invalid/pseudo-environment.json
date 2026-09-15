@@ -1,0 +1,15 @@
+{
+  "schema": "ores-sops.portable-config/v1",
+  "keys": [
+    {
+      "key": "DATABASE_URL",
+      "valueType": "url",
+      "sensitivity": "secret",
+      "required": true,
+      "environments": ["qa"],
+      "profiles": ["test"],
+      "profileOverride": false,
+      "diagnosticVisibility": "key_name_only"
+    }
+  ]
+}
