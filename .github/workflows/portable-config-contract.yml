@@ -1,0 +1,82 @@
+name: Portable config contract
+
+on:
+  pull_request:
+    paths:
+      - 'contracts/portable-config/**'
+      - '.github/workflows/portable-config-contract.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'contracts/portable-config/**'
+      - '.github/workflows/portable-config-contract.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  portable-config-contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node 22
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22.16.0'
+
+      - name: Install exact TJSV contract checker
+        shell: bash
+        env:
+          TJSV_REVISION: a4b731fbf82c4d162abd74fd03758fa32bb76176
+        run: |
+          set -euo pipefail
+          root="${RUNNER_TEMP}/tjsv"
+          mkdir -p "$root"
+          cd "$root"
+          npm init --yes >/dev/null
+          npm install --no-save --package-lock=false \
+            "https://github.com/ORESoftware/typespec-json-schema-validator/archive/${TJSV_REVISION}.tar.gz"
+          cp -R "$GITHUB_WORKSPACE/contracts/portable-config" "$root/contract"
+          printf 'TJSV_BIN=%s/node_modules/.bin/tjsv\n' "$root" >> "$GITHUB_ENV"
+          printf 'TJSV_CONTRACT_ROOT=%s/contract\n' "$root" >> "$GITHUB_ENV"
+
+      - name: Require TypeSpec and authored Draft 2020-12 parity
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$TJSV_BIN" check \
+            --typespec="$TJSV_CONTRACT_ROOT/main.tsp" \
+            --schema="$TJSV_CONTRACT_ROOT/authored.schema.json" \
+            --instances="$TJSV_CONTRACT_ROOT/instances" \
+            --report="${RUNNER_TEMP}/portable-config.tjsv.json" \
+            --quiet
+
+      - name: Prove TJSV fails closed on deployment-environment drift
+        shell: bash
+        run: |
+          set -euo pipefail
+          drift="${RUNNER_TEMP}/authored.drift.schema.json"
+          TJSV_CONTRACT_ROOT="$TJSV_CONTRACT_ROOT" node --input-type=module - "$drift" <<'NODE'
+          import fs from 'node:fs';
+          const output = process.argv[2];
+          const schema = JSON.parse(fs.readFileSync(`${process.env.TJSV_CONTRACT_ROOT}/authored.schema.json`, 'utf8'));
+          schema.$defs.DeploymentEnvironment.enum = ['dev', 'stage', 'production'];
+          fs.writeFileSync(output, `${JSON.stringify(schema, null, 2)}\n`);
+          NODE
+          set +e
+          "$TJSV_BIN" check \
+            --typespec="$TJSV_CONTRACT_ROOT/main.tsp" \
+            --schema="$drift" \
+            --instances="$TJSV_CONTRACT_ROOT/instances" \
+            --quiet
+          status=$?
+          set -e
+          test "$status" -eq 2 || {
+            echo "::error::intentional portable-config drift must stop with exit 2; got $status"
+            exit 1
+          }
