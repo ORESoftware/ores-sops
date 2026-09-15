@@ -49,12 +49,22 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          report="${RUNNER_TEMP}/portable-config.tjsv.json"
+          set +e
           "$TJSV_BIN" check \
             --typespec="$TJSV_CONTRACT_ROOT/main.tsp" \
             --schema="$TJSV_CONTRACT_ROOT/authored.schema.json" \
             --instances="$TJSV_CONTRACT_ROOT/instances" \
-            --report="${RUNNER_TEMP}/portable-config.tjsv.json" \
+            --report="$report" \
             --quiet
+          status=$?
+          set -e
+          if [ "$status" -ne 0 ]; then
+            echo '::group::TJSV portable-config report'
+            test ! -f "$report" || cat "$report"
+            echo '::endgroup::'
+            exit "$status"
+          fi
 
       - name: Prove TJSV fails closed on deployment-environment drift
         shell: bash
