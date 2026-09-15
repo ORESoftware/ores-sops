@@ -130,6 +130,76 @@ case "${1:-}" in
   -V|--version) admission_args=("$0" version) ;;
 esac
 
+# Keep the checker source literal. The quoted heredoc prevents shell expansion
+# of JavaScript `$` syntax and keeps attacker-controlled argv out of executable
+# shell source without suppressing ShellCheck diagnostics.
+NODE_ADMISSION_SCRIPT="$(cat <<'EOF_NODE'
+let text = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => {
+  text += chunk;
+  if (text.length > 262144) process.exit(2);
+});
+process.stdin.on("end", () => {
+  try {
+    const parsed = JSON.parse(text);
+    const decodeList = (key) => {
+      if (parsed[key] === undefined) return [];
+      const raw = parsed[key];
+      if (typeof raw !== "string") return null;
+      const value = JSON.parse(raw);
+      return Array.isArray(value) && value.every((item) => typeof item === "string")
+        ? value
+        : null;
+    };
+    const unknown = decodeList("ORES_SOPS_UNKNOWN_OPTIONS");
+    const errors = decodeList("ORES_SOPS_PARSE_ERRORS");
+    const positionals = decodeList("ORES_SOPS_POSITIONALS");
+    const command = parsed.ORES_SOPS_COMMAND;
+    const expected = process.env.ORES_SOPS_EXPECTED_COMMAND;
+    if (
+      !unknown || !errors || !positionals ||
+      unknown.length !== 0 || errors.length !== 0 ||
+      typeof command !== "string" || command !== expected
+    ) {
+      process.exit(2);
+      return;
+    }
+
+    if (positionals.length < 2) {
+      process.exit(2);
+      return;
+    }
+    const operands = positionals.slice(2);
+    const profileCommands = new Set(["use", "encrypt", "edit", "sync-keys", "diff"]);
+    if (profileCommands.has(command)) {
+      if (operands.length > 1) process.exit(2);
+      if (
+        operands.length === 1 &&
+        !["dev", "stage", "prod"].includes(operands[0])
+      ) process.exit(2);
+    } else if (command === "exec") {
+      // The wrapper owns semantic checks for a missing `--` or child command
+      // so diagnostics stay fixed and redacted. This layer only bounds any
+      // downstream argv that flags2env did observe.
+      if (operands.length > 128) process.exit(2);
+      let bytes = 0;
+      for (const operand of operands) {
+        if (operand.length > 4096 || /[\u0000-\u001f\u007f]/u.test(operand)) process.exit(2);
+        bytes += Buffer.byteLength(operand, "utf8") + 1;
+        if (bytes > 32768) process.exit(2);
+      }
+      if (operands.length > 0 && operands[0].length === 0) process.exit(2);
+    } else if (operands.length !== 0) {
+      process.exit(2);
+    }
+  } catch {
+    process.exit(2);
+  }
+});
+EOF_NODE
+)"
+
 # Parse the real argv through flags2env and consume only its closed command,
 # unknown-option, parse-error, and positional channels. Parser stdout is piped
 # directly into a bounded JSON checker; it is never eval'd, exported, logged,
@@ -138,74 +208,7 @@ esac
 if ! (
   cd "${SCRIPT_DIR}"
   flags2env "${admission_args[@]}" 2>/dev/null |
-    # The inline program is intentionally single-quoted so shell variables and
-    # attacker-controlled argv can never expand inside the admission checker.
-    # shellcheck disable=SC2016
-    ORES_SOPS_EXPECTED_COMMAND="${command_name}" node -e '
-      let text = "";
-      process.stdin.setEncoding("utf8");
-      process.stdin.on("data", (chunk) => {
-        text += chunk;
-        if (text.length > 262144) process.exit(2);
-      });
-      process.stdin.on("end", () => {
-        try {
-          const parsed = JSON.parse(text);
-          const decodeList = (key) => {
-            if (parsed[key] === undefined) return [];
-            const raw = parsed[key];
-            if (typeof raw !== "string") return null;
-            const value = JSON.parse(raw);
-            return Array.isArray(value) && value.every((item) => typeof item === "string")
-              ? value
-              : null;
-          };
-          const unknown = decodeList("ORES_SOPS_UNKNOWN_OPTIONS");
-          const errors = decodeList("ORES_SOPS_PARSE_ERRORS");
-          const positionals = decodeList("ORES_SOPS_POSITIONALS");
-          const command = parsed.ORES_SOPS_COMMAND;
-          const expected = process.env.ORES_SOPS_EXPECTED_COMMAND;
-          if (
-            !unknown || !errors || !positionals ||
-            unknown.length !== 0 || errors.length !== 0 ||
-            typeof command !== "string" || command !== expected
-          ) {
-            process.exit(2);
-            return;
-          }
-
-          if (positionals.length < 2) {
-            process.exit(2);
-            return;
-          }
-          const operands = positionals.slice(2);
-          const profileCommands = new Set(["use", "encrypt", "edit", "sync-keys", "diff"]);
-          if (profileCommands.has(command)) {
-            if (operands.length > 1) process.exit(2);
-            if (
-              operands.length === 1 &&
-              !["dev", "stage", "prod"].includes(operands[0])
-            ) process.exit(2);
-          } else if (command === "exec") {
-            // The wrapper owns semantic checks for a missing `--` or child
-            // command so diagnostics stay fixed and redacted. This layer only
-            // bounds any downstream argv that flags2env did observe.
-            if (operands.length > 128) process.exit(2);
-            let bytes = 0;
-            for (const operand of operands) {
-              if (operand.length > 4096 || /[\u0000-\u001f\u007f]/u.test(operand)) process.exit(2);
-              bytes += Buffer.byteLength(operand, "utf8") + 1;
-              if (bytes > 32768) process.exit(2);
-            }
-            if (operands.length > 0 && operands[0].length === 0) process.exit(2);
-          } else if (operands.length !== 0) {
-            process.exit(2);
-          }
-        } catch {
-          process.exit(2);
-        }
-      });
-    ' 2>/dev/null
+    ORES_SOPS_EXPECTED_COMMAND="${command_name}" node -e "${NODE_ADMISSION_SCRIPT}" 2>/dev/null
 ); then
   fail argv_admission_rejected "command-line admission failed" "" "${command_name}"
 fi
