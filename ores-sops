@@ -138,6 +138,9 @@ esac
 if ! (
   cd "${SCRIPT_DIR}"
   flags2env "${admission_args[@]}" 2>/dev/null |
+    # The inline program is intentionally single-quoted so shell variables and
+    # attacker-controlled argv can never expand inside the admission checker.
+    # shellcheck disable=SC2016
     ORES_SOPS_EXPECTED_COMMAND="${command_name}" node -e '
       let text = "";
       process.stdin.setEncoding("utf8");
