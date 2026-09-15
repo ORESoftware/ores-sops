@@ -27,7 +27,7 @@ fail() {
 
 command_name="${1:-help}"
 case "${command_name}" in
-  init|use|refresh|encrypt|edit|sync-keys|diff|status|lock|verify|precommit|ensure-dec|install-hooks|help|version) ;;
+  init|use|exec|refresh|encrypt|edit|sync-keys|diff|status|lock|verify|precommit|ensure-dec|install-hooks|help|version) ;;
   -h|--help) command_name="help" ;;
   -V|--version) command_name="version" ;;
   *) command_name="unknown" ;;
@@ -113,6 +113,17 @@ if ! (
               operands.length === 1 &&
               !["dev", "stage", "prod"].includes(operands[0])
             ) process.exit(2);
+          } else if (command === "exec") {
+            // Downstream argv after the bare -- is intentionally opaque. Bound
+            // its shape here without reflecting any operand into diagnostics.
+            if (operands.length < 1 || operands.length > 128) process.exit(2);
+            let bytes = 0;
+            for (const operand of operands) {
+              if (operand.length > 4096 || /[\u0000-\u001f\u007f]/u.test(operand)) process.exit(2);
+              bytes += Buffer.byteLength(operand, "utf8") + 1;
+              if (bytes > 32768) process.exit(2);
+            }
+            if (operands[0].length === 0) process.exit(2);
           } else if (operands.length !== 0) {
             process.exit(2);
           }
@@ -183,6 +194,54 @@ if [[ "${command_name}" =~ ^(use|encrypt|edit|sync-keys|diff)$ ]]; then
   esac
 
   normalized+=("${safe_profile}")
+  args=("${normalized[@]}")
+elif [[ "${command_name}" == "exec" ]]; then
+  normalized+=("exec")
+  exec_argv=()
+  saw_delimiter=0
+  i=1
+  while (( i < ${#args[@]} )); do
+    arg="${args[$i]}"
+    if (( saw_delimiter == 1 )); then
+      exec_argv+=("${arg}")
+      i=$((i + 1))
+      continue
+    fi
+    case "${arg}" in
+      --environment=*|--env=*)
+        candidate="${arg#*=}"
+        [[ -z "${safe_profile}" || "${safe_profile}" == "${candidate}" ]] || \
+          fail environment_conflict "environment was supplied more than once with conflicting values" "ORES_SOPS_ENVIRONMENT" "${command_name}"
+        safe_profile="${candidate}"
+        ;;
+      --environment|--env)
+        (( i + 1 < ${#args[@]} )) || fail required_env_missing "required environment is missing" "ORES_SOPS_ENVIRONMENT" "${command_name}"
+        i=$((i + 1))
+        candidate="${args[$i]}"
+        [[ -z "${safe_profile}" || "${safe_profile}" == "${candidate}" ]] || \
+          fail environment_conflict "environment was supplied more than once with conflicting values" "ORES_SOPS_ENVIRONMENT" "${command_name}"
+        safe_profile="${candidate}"
+        ;;
+      --)
+        saw_delimiter=1
+        ;;
+      *)
+        fail argv_admission_rejected "command-line admission failed" "" "${command_name}"
+        ;;
+    esac
+    i=$((i + 1))
+  done
+
+  [[ -n "${safe_profile}" ]] || \
+    fail required_env_missing "required environment is missing" "ORES_SOPS_ENVIRONMENT" "${command_name}"
+  case "${safe_profile}" in
+    dev|stage|prod) ;;
+    *) fail invalid_environment "environment must be dev, stage, or prod" "ORES_SOPS_ENVIRONMENT" "${command_name}" ;;
+  esac
+  (( saw_delimiter == 1 && ${#exec_argv[@]} > 0 )) || \
+    fail argv_admission_rejected "exec requires a bare -- followed by a command" "" "${command_name}"
+
+  normalized+=("${safe_profile}" "--" "${exec_argv[@]}")
   args=("${normalized[@]}")
 fi
 
