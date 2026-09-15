@@ -22,6 +22,79 @@ fail() {
   exit 2
 }
 
+posix_shell_quote() {
+  local value="$1"
+  # Downstream argv admission rejects control characters first, so a simple
+  # single-quote transform is lossless and valid for SOPS' Unix /bin/sh -c.
+  value=${value//\'/\'"\'"\'}
+  printf "'%s'" "$value"
+}
+
+run_exec() {
+  local name="${1:-}" delimiter="${2:-}" root policy src os_name
+  local command_string="" arg quoted total_bytes=0
+  shift 2 || true
+
+  case "$name" in
+    dev|stage|prod) ;;
+    *) fail invalid_environment "environment must be dev, stage, or prod" "ORES_SOPS_ENVIRONMENT" "exec" ;;
+  esac
+  [[ "$delimiter" == "--" && "$#" -gt 0 ]] || \
+    fail argv_admission_rejected "exec requires a bare -- followed by a command" "" "exec"
+
+  os_name="$(uname -s 2>/dev/null || true)"
+  case "$os_name" in
+    MINGW*|MSYS*|CYGWIN*|Windows_NT)
+      fail unsupported_platform "exec currently requires a POSIX /bin/sh execution boundary" "" "exec"
+      ;;
+  esac
+
+  command -v sops >/dev/null 2>&1 || \
+    fail dependency_missing "required dependency sops is not available" "sops" "exec"
+  command -v git >/dev/null 2>&1 || \
+    fail dependency_missing "required dependency git is not available" "git" "exec"
+
+  root="$(git rev-parse --show-toplevel 2>/dev/null)" || \
+    fail repository_missing "not inside a git repository" "" "exec"
+  policy="$root/.sops.yaml"
+  src="$root/env/enc/$name.env.enc"
+
+  [[ ! -L "$root/env" && ! -L "$root/env/enc" ]] || \
+    fail unsafe_path "managed env/enc path must not be a symlink" "" "exec"
+  [[ -d "$root/env/enc" ]] || \
+    fail ciphertext_missing "managed env/enc directory is missing" "" "exec"
+  [[ -f "$policy" && ! -L "$policy" ]] || \
+    fail policy_invalid "managed .sops.yaml must be a regular non-symlink file" "" "exec"
+  [[ -f "$src" && ! -L "$src" ]] || \
+    fail ciphertext_missing "selected encrypted environment is missing or unsafe" "" "exec"
+
+  if ! grep -Fq "path_regex: ^env/enc/$name\\.env\\.enc$" "$policy"; then
+    fail policy_invalid "selected environment has no exact SOPS creation rule" "" "exec"
+  fi
+
+  if (( $# > 128 )); then
+    fail argv_admission_rejected "exec downstream argv exceeds the supported argument count" "" "exec"
+  fi
+  [[ -n "${1:-}" ]] || \
+    fail argv_admission_rejected "exec command must not be empty" "" "exec"
+
+  for arg in "$@"; do
+    if (( ${#arg} > 4096 )) || [[ "$arg" =~ [[:cntrl:]] ]]; then
+      fail argv_admission_rejected "exec downstream argv contains an unsupported token" "" "exec"
+    fi
+    total_bytes=$((total_bytes + ${#arg} + 1))
+    (( total_bytes <= 32768 )) || \
+      fail argv_admission_rejected "exec downstream argv exceeds the supported size" "" "exec"
+    quoted="$(posix_shell_quote "$arg")"
+    command_string="${command_string:+$command_string }$quoted"
+  done
+
+  # SOPS decrypts directly into the child environment. No env/dec file, root
+  # .env symlink, shell sourcing, step output, or plaintext command argument is
+  # created by this path. The command string contains only caller-supplied argv.
+  (cd "$root" && sops exec-env --input-type dotenv "$src" "$command_string")
+}
+
 [[ -x "${CORE}" ]] || fail core_missing "internal core executable is missing"
 [[ -f "${CONFIG}" ]] || fail config_missing ".cli-flags.toml is missing"
 
@@ -73,8 +146,6 @@ if ! (
         try {
           const parsed = JSON.parse(text);
           const decodeList = (key) => {
-            // Canonical flags2env emits configured list channels only when
-            // they contain entries. Absence therefore means an empty list.
             if (parsed[key] === undefined) return [];
             const raw = parsed[key];
             if (typeof raw !== "string") return null;
@@ -97,10 +168,6 @@ if ! (
             return;
           }
 
-          // The Node CLI prepends its own executable path, and ores-sops passes
-          // its wrapper path as the next fixed token. flags2env deliberately
-          // tracks both leading wrapper/program positionals even though they do
-          // not participate in command selection. They are not user operands.
           if (positionals.length < 2) {
             process.exit(2);
             return;
@@ -114,8 +181,6 @@ if ! (
               !["dev", "stage", "prod"].includes(operands[0])
             ) process.exit(2);
           } else if (command === "exec") {
-            // Downstream argv after the bare -- is intentionally opaque. Bound
-            // its shape here without reflecting any operand into diagnostics.
             if (operands.length < 1 || operands.length > 128) process.exit(2);
             let bytes = 0;
             for (const operand of operands) {
@@ -172,9 +237,6 @@ if [[ "${command_name}" =~ ^(use|encrypt|edit|sync-keys|diff)$ ]]; then
         normalized+=("${arg}")
         ;;
       *)
-        # Positional profile values are public input. Reject noncanonical values
-        # without reflecting them into stderr or telemetry, even if a parser
-        # implementation omits that positional from its closed JSON channel.
         fail argv_admission_rejected "command-line admission failed" "" "${command_name}"
         ;;
     esac
@@ -248,8 +310,13 @@ fi
 emit_diag command_started "${command_name}" "${safe_profile}" "" "0"
 
 set +e
-"${CORE}" "${args[@]}"
-status=$?
+if [[ "${command_name}" == "exec" ]]; then
+  run_exec "${args[@]:1}"
+  status=$?
+else
+  "${CORE}" "${args[@]}"
+  status=$?
+fi
 set -e
 
 if (( status == 0 )); then
