@@ -1,0 +1,45 @@
+[package]
+org = "oresoftware"
+name = "ores-sops"
+version = "0.1.0"
+description = "SOPS+age encrypted environment lifecycle, contract validation, and secret-boundary tooling for the ORES fleet"
+
+[package.repository]
+vcs = "git"
+url = "https://github.com/ORESoftware/ores-sops"
+
+# TJSV validates independently-authored TypeSpec + Draft 2020-12 JSON Schema
+# authorities. Exact CI execution remains pinned to reviewed immutable commits;
+# this package edge makes the tooling relationship visible to the Zed graph.
+[dependencies]
+"oresoftware/typespec-json-schema-validator" = "^0.1.0"
+
+[install]
+dir = ".vendor/.zed"
+
+[targets.repository]
+dir = "."
+adapter = "none"
+
+[build]
+command = "just audit && just test-contract && just check-ignore"
+
+[scripts]
+test = "just audit && just test-contract && just check-ignore"
+full-check = "just check"
+
+[publish]
+include_readme = true
+tag_format = "v{version}"
+exclude = [
+  ".env",
+  ".env.*",
+  "env/dec/**",
+  ".direnv/**",
+  ".vendor/.zed/**",
+  ".zed/**",
+  ".zed-pack/**",
+  "result",
+  "tmp/**",
+  "**/*.log",
+]
