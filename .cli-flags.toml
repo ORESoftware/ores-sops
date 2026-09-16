@@ -51,6 +51,14 @@ env = "ORES_SOPS_ENVIRONMENT"
 aliases = ["environment"]
 type = "string"
 
+[commands.exec]
+# Everything after a bare `--` remains in the structured positional channel and
+# is validated/quoted by the ores-sops wrapper before it reaches SOPS exec-env.
+[commands.exec.flags.environment]
+env = "ORES_SOPS_ENVIRONMENT"
+aliases = ["environment", "env"]
+type = "string"
+
 [commands.refresh]
 [commands.refresh.flags.quiet]
 env = "ORES_SOPS_QUIET"
