@@ -1,0 +1,27 @@
+name: sops-consumer-config-contract
+
+on:
+  pull_request:
+    paths:
+      - 'contracts/consumer-config/**'
+      - '.github/workflows/consumer-config-contract.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'contracts/consumer-config/**'
+      - '.github/workflows/consumer-config-contract.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  parity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: ORESoftware/typespec-json-schema-validator@bd503465dab8c5148fee722b443ed04ff126c9bf
+        with:
+          typespec: contracts/consumer-config/main.tsp
+          schema: contracts/consumer-config/authored.schema.json
