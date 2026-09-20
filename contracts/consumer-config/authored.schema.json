@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://ores.dev/schemas/ores-sops-consumer-config.v1.json",
-  "$ref": "#/$defs/OresSopsConsumerConfigFile",
+  "$ref": "OresSopsConsumerConfigFile",
   "$defs": {
     "DeploymentEnvironment": {
       "$id": "DeploymentEnvironment",
@@ -32,11 +32,11 @@
       "properties": {
         "schema_version": {"const": 1},
         "protocol": {"const": "ores.sops.consumer-config/v1"},
-        "environment": {"$ref": "#/$defs/DeploymentEnvironment"},
-        "profile": {"$ref": "#/$defs/ExecutionProfile"},
+        "environment": {"$ref": "DeploymentEnvironment"},
+        "profile": {"$ref": "ExecutionProfile"},
         "portable_config_path": {"type": "string", "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$"},
         "ciphertext_path": {"type": "string", "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$"},
-        "execution": {"$ref": "#/$defs/ExecutionSafety"}
+        "execution": {"$ref": "ExecutionSafety"}
       }
     }
   }
