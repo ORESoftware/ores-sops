@@ -1,0 +1,4 @@
+# Repository-root activation binding for ORESoftware/ores-sops.
+# Portable secret/configuration metadata remains governed by contracts/portable-config/.
+schema = "ores.sops/config/v1"
+enabled = false
