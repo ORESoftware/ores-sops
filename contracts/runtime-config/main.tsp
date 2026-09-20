@@ -13,8 +13,10 @@ enum OresSopsDiagnosticsMode {
 
 @id("OresSopsExecutionConfig")
 model OresSopsExecutionConfig {
-  fail_closed: boolean;
-  persist_plaintext: boolean;
+  // SOPS consumers fail closed; this is a policy invariant, not an application toggle.
+  fail_closed: true;
+  // Decrypted plaintext is runtime-only and must never become persistent config state.
+  persist_plaintext: false;
   diagnostics: OresSopsDiagnosticsMode;
 }
 
@@ -22,13 +24,18 @@ model OresSopsExecutionConfig {
 model OresSopsRuntimeConfig {
   schema_version: 1;
   protocol: "ores.sops.consumer-config/v1";
-  @minLength(1)
+
+  @pattern("^[a-z][a-z0-9_-]*$")
   environment: string;
-  @minLength(1)
+
+  @pattern("^[a-z][a-z0-9_-]*$")
   profile: string;
-  @minLength(1)
+
+  @pattern("^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$")
   portable_config_path: string;
-  @minLength(1)
+
+  @pattern("^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$")
   ciphertext_path: string;
+
   execution: OresSopsExecutionConfig;
 }
