@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "ores.sops.runtime-config.schema.json",
+  "$defs": {
+    "OresSopsRuntimeConfig": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$id": "OresSopsRuntimeConfig",
+      "type": "object",
+      "properties": {
+        "schema": { "type": "string", "const": "ores.sops/config/v1" },
+        "enabled": { "type": "boolean" }
+      },
+      "required": ["schema", "enabled"],
+      "unevaluatedProperties": false
+    }
+  }
+}
