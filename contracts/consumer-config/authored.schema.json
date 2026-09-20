@@ -1,18 +1,20 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://ores.dev/schemas/ores-sops-consumer-config.v1.json",
-  "title": "ORES SOPS consumer configuration",
-  "type": "object",
-  "additionalProperties": false,
-  "required": ["schema_version", "protocol", "environment", "profile", "portable_config_path", "ciphertext_path", "execution"],
-  "properties": {
-    "schema_version": {"const": 1},
-    "protocol": {"const": "ores.sops.consumer-config/v1"},
-    "environment": {"enum": ["dev", "stage", "prod"]},
-    "profile": {"enum": ["local", "gha", "gha-indie-worker", "test"]},
-    "portable_config_path": {"type": "string", "minLength": 1},
-    "ciphertext_path": {"type": "string", "minLength": 1},
-    "execution": {
+  "$ref": "OresSopsConsumerConfigFile",
+  "$defs": {
+    "DeploymentEnvironment": {
+      "$id": "DeploymentEnvironment",
+      "type": "string",
+      "enum": ["dev", "stage", "prod"]
+    },
+    "ExecutionProfile": {
+      "$id": "ExecutionProfile",
+      "type": "string",
+      "enum": ["local", "gha", "gha-indie-worker", "test"]
+    },
+    "ExecutionSafety": {
+      "$id": "ExecutionSafety",
       "type": "object",
       "additionalProperties": false,
       "required": ["fail_closed", "persist_plaintext", "diagnostics"],
@@ -20,6 +22,21 @@
         "fail_closed": {"const": true},
         "persist_plaintext": {"const": false},
         "diagnostics": {"const": "key-name-only"}
+      }
+    },
+    "OresSopsConsumerConfigFile": {
+      "$id": "OresSopsConsumerConfigFile",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "protocol", "environment", "profile", "portable_config_path", "ciphertext_path", "execution"],
+      "properties": {
+        "schema_version": {"const": 1},
+        "protocol": {"const": "ores.sops.consumer-config/v1"},
+        "environment": {"$ref": "DeploymentEnvironment"},
+        "profile": {"$ref": "ExecutionProfile"},
+        "portable_config_path": {"type": "string", "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$"},
+        "ciphertext_path": {"type": "string", "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$"},
+        "execution": {"$ref": "ExecutionSafety"}
       }
     }
   }
