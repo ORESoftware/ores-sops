@@ -1,0 +1,4 @@
+{
+  "schema": "ores.sops/config/v1",
+  "enabled": false
+}
