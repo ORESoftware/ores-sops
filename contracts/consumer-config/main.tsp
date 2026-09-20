@@ -28,7 +28,13 @@ model OresSopsConsumerConfigFile {
   protocol: "ores.sops.consumer-config/v1";
   environment: DeploymentEnvironment;
   profile: ExecutionProfile;
+
+  // Canonical repository-relative paths only. Consumers must not read outside the repo.
+  @pattern("^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$")
   portable_config_path: string;
+
+  @pattern("^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$")
   ciphertext_path: string;
+
   execution: ExecutionSafety;
 }

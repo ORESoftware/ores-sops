@@ -4,19 +4,23 @@ on:
   pull_request:
     paths:
       - 'contracts/consumer-config/**'
+      - 'examples/.ores-sops.toml'
       - '.github/workflows/consumer-config-contract.yml'
   push:
     branches: [main]
     paths:
       - 'contracts/consumer-config/**'
+      - 'examples/.ores-sops.toml'
       - '.github/workflows/consumer-config-contract.yml'
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
   parity:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
@@ -25,3 +29,5 @@ jobs:
         with:
           typespec: contracts/consumer-config/main.tsp
           schema: contracts/consumer-config/authored.schema.json
+          instances: contracts/consumer-config/instances
+          seal_object_schemas: true

@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "protocol": "ores.sops.consumer-config/v1",
+  "environment": "production",
+  "profile": "local",
+  "portable_config_path": "config/portable-config.json",
+  "ciphertext_path": "env/prod.enc.yaml",
+  "execution": {"fail_closed": true, "persist_plaintext": false, "diagnostics": "key-name-only"}
+}

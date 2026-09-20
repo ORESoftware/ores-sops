@@ -10,8 +10,8 @@
     "protocol": {"const": "ores.sops.consumer-config/v1"},
     "environment": {"enum": ["dev", "stage", "prod"]},
     "profile": {"enum": ["local", "gha", "gha-indie-worker", "test"]},
-    "portable_config_path": {"type": "string", "minLength": 1},
-    "ciphertext_path": {"type": "string", "minLength": 1},
+    "portable_config_path": {"type": "string", "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$"},
+    "ciphertext_path": {"type": "string", "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$"},
     "execution": {
       "type": "object",
       "additionalProperties": false,
