@@ -21,11 +21,21 @@ dir = ".vendor/.zed"
 dir = "."
 adapter = "none"
 
+[targets.contracts]
+dir = "contracts"
+name = "ores-sops-contracts"
+adapter = "none"
+
+[targets.conformance]
+dir = "conformance"
+name = "ores-sops-conformance"
+adapter = "none"
+
 [build]
 command = "just audit && just test-contract && just check-ignore"
 
 [scripts]
-test = "just audit && just test-contract && just check-ignore"
+test = "sh conformance/check.sh && just audit && just test-contract && just check-ignore"
 full-check = "just check"
 
 [publish]
