@@ -1,4 +1,13 @@
-# Repository-root activation binding for ORESoftware/ores-sops.
+# Repository-root consumer binding for ORESoftware/ores-sops.
 # Portable secret/configuration metadata remains governed by contracts/portable-config/.
-schema = "ores.sops/config/v1"
-enabled = false
+schema_version = 1
+protocol = "ores.sops.consumer-config/v1"
+environment = "dev"
+profile = "local"
+portable_config_path = "config/portable-config.json"
+ciphertext_path = "env/dev.enc.yaml"
+
+[execution]
+fail_closed = true
+persist_plaintext = false
+diagnostics = "key-name-only"
