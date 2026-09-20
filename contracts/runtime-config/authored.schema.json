@@ -13,8 +13,8 @@
       "$id": "OresSopsExecutionConfig",
       "type": "object",
       "properties": {
-        "fail_closed": { "type": "boolean" },
-        "persist_plaintext": { "type": "boolean" },
+        "fail_closed": { "const": true },
+        "persist_plaintext": { "const": false },
         "diagnostics": { "$ref": "OresSopsDiagnosticsMode" }
       },
       "required": ["fail_closed", "persist_plaintext", "diagnostics"],
@@ -27,10 +27,10 @@
       "properties": {
         "schema_version": { "type": "integer", "const": 1 },
         "protocol": { "type": "string", "const": "ores.sops.consumer-config/v1" },
-        "environment": { "type": "string", "minLength": 1 },
-        "profile": { "type": "string", "minLength": 1 },
-        "portable_config_path": { "type": "string", "minLength": 1 },
-        "ciphertext_path": { "type": "string", "minLength": 1 },
+        "environment": { "type": "string", "pattern": "^[a-z][a-z0-9_-]*$" },
+        "profile": { "type": "string", "pattern": "^[a-z][a-z0-9_-]*$" },
+        "portable_config_path": { "type": "string", "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$" },
+        "ciphertext_path": { "type": "string", "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$" },
         "execution": { "$ref": "OresSopsExecutionConfig" }
       },
       "required": ["schema_version", "protocol", "environment", "profile", "portable_config_path", "ciphertext_path", "execution"],
