@@ -2,15 +2,38 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "ores.sops.runtime-config.schema.json",
   "$defs": {
+    "OresSopsDiagnosticsMode": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$id": "OresSopsDiagnosticsMode",
+      "type": "string",
+      "enum": ["key-name-only"]
+    },
+    "OresSopsExecutionConfig": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$id": "OresSopsExecutionConfig",
+      "type": "object",
+      "properties": {
+        "fail_closed": { "type": "boolean" },
+        "persist_plaintext": { "type": "boolean" },
+        "diagnostics": { "$ref": "OresSopsDiagnosticsMode" }
+      },
+      "required": ["fail_closed", "persist_plaintext", "diagnostics"],
+      "unevaluatedProperties": false
+    },
     "OresSopsRuntimeConfig": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "$id": "OresSopsRuntimeConfig",
       "type": "object",
       "properties": {
-        "schema": { "type": "string", "const": "ores.sops/config/v1" },
-        "enabled": { "type": "boolean" }
+        "schema_version": { "type": "integer", "const": 1 },
+        "protocol": { "type": "string", "const": "ores.sops.consumer-config/v1" },
+        "environment": { "type": "string", "minLength": 1 },
+        "profile": { "type": "string", "minLength": 1 },
+        "portable_config_path": { "type": "string", "minLength": 1 },
+        "ciphertext_path": { "type": "string", "minLength": 1 },
+        "execution": { "$ref": "OresSopsExecutionConfig" }
       },
-      "required": ["schema", "enabled"],
+      "required": ["schema_version", "protocol", "environment", "profile", "portable_config_path", "ciphertext_path", "execution"],
       "unevaluatedProperties": false
     }
   }
