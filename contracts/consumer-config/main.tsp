@@ -3,12 +3,14 @@ using TypeSpec.JsonSchema;
 
 namespace OresSops.ConsumerConfig;
 
+@id("DeploymentEnvironment")
 enum DeploymentEnvironment {
   dev,
   stage,
   prod,
 }
 
+@id("ExecutionProfile")
 enum ExecutionProfile {
   local,
   gha,
@@ -16,6 +18,7 @@ enum ExecutionProfile {
   test,
 }
 
+@id("ExecutionSafety")
 model ExecutionSafety {
   fail_closed: true;
   persist_plaintext: false;
