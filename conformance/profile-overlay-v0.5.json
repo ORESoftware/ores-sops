@@ -1,0 +1,14 @@
+{
+  "schema": "ores.sops.profile-overlay/v0.5",
+  "environments": ["dev", "stage", "prod"],
+  "profiles": ["local", "gha", "gha-indie-worker", "test"],
+  "cases": [
+    {"id": "dev-local-no-collision", "environment": "dev", "profile": "local", "environment_keys": ["API_BASE_URL"], "profile_keys": ["LOCAL_CACHE_DIR"], "expected": {"admitted": true}},
+    {"id": "allowed-profile-override", "environment": "dev", "profile": "test", "environment_keys": ["SERVICE_URL"], "profile_keys": ["SERVICE_URL"], "overridable_keys": ["SERVICE_URL"], "expected": {"admitted": true, "winner": "profile"}},
+    {"id": "forbidden-profile-override", "environment": "stage", "profile": "gha", "environment_keys": ["DATABASE_URL"], "profile_keys": ["DATABASE_URL"], "overridable_keys": [], "expected": {"admitted": false, "reason": "profile_override_not_admitted"}},
+    {"id": "prod-ordinary-ci", "environment": "prod", "profile": "gha", "expected": {"admitted": false, "reason": "prod_profile_not_authorized"}},
+    {"id": "unknown-environment", "environment": "preview", "profile": "local", "expected": {"admitted": false, "reason": "unknown_environment"}},
+    {"id": "unknown-profile", "environment": "dev", "profile": "developer-laptop", "expected": {"admitted": false, "reason": "unknown_profile"}},
+    {"id": "diagnostics-redact-values", "environment": "dev", "profile": "test", "secret_keys": ["API_TOKEN"], "expected": {"diagnostic_keys_allowed": true, "diagnostic_values_allowed": false}}
+  ]
+}
